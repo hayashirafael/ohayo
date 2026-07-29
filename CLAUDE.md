@@ -10,18 +10,29 @@ globally-active message.
 
 ## Domain vocabulary
 
-- **Account** — a Claude Code config directory (`~/.claude`, `~/.claude2`, …).
-  Display label resolves alias → logged-in email (`oauthAccount.emailAddress`
-  in `<dir>/.claude.json`) → folder name.
-- **Window** — the plan's 5-hour usage block. Inferred passively by streaming
-  the local transcripts at `<account>/projects/**.jsonl`; the app never calls
-  the CLI or the network to detect it.
+- **Account** — a native or custom Claude/Codex account resolved by
+  `ProviderAccountContext`. Native Claude is deliberately different from
+  `CLAUDE_CONFIG_DIR=~/.claude`: config/transcripts live under `~/.claude`,
+  while identity/trust live in `~/.claude.json`, and the environment override
+  must be absent. Custom Claude uses the override. Codex defaults to
+  `~/.codex` and uses `CODEX_HOME`. Display label resolves alias → logged-in
+  email → folder name. Existing directories resolve symlinks before they key
+  pauses, aliases, queues, schedulers, cooldowns or conflict checks. Launching
+  the app does not rewrite legacy task payloads merely to canonicalize them;
+  the form normalizes their account selection when edited.
+- **Window** — the plan's 5-hour usage block. Inferred passively from local
+  transcripts. Evidence is fail-closed: Claude requires a non-synthetic,
+  non-error assistant event with positive token usage; Codex requires a
+  `token_count` event with positive `last_token_usage`. Auth/model/network
+  errors and zero-token events do not open a fictional window.
 - **Agendamento** (`ScheduledTask`) — the single unified concept: a command
   dispatched either **continuously** or on **fixed times**. Carries an embedded
   prompt (`command: Message`), an optional name, an `enabled` toggle, and a
   `repetition`:
   - `continuous` — arms at the end of the detected window and chains 5h windows
     24/7; driven by `RenewalEngine`, keyed by the account the command targets.
+    New tasks persist `bootstrapWhenInactive` from an explicit UI choice;
+    missing values identify legacy tasks and resolve fail-closed to `false`.
     Max one continuous agendamento per account (`AppState.hasContinuousConflict`).
   - `fixed` — fixed times × weekdays (`AgendaMath`), driven by `TaskScheduler`,
     with a single catch-up on wake.
@@ -34,71 +45,118 @@ globally-active message.
   `AppState.defaultMessage`); Codex has its own minimal default
   (`AppState.defaultCodexMessage`, uid `…0002`). Codex with no explicit model
   omits `--model` (and reasoning) so the account's `config.toml` default wins.
-  A Message can carry an optional account skill (`skill: String?`), detected by
-  `SkillCatalog` (personal + plugin skills for Claude, `skills/` only for
-  Codex) and prefixed at dispatch via `resolvedPromptText` (`/skill …` for
-  Claude, `$skill …` for Codex); with a skill present, `resolvedSafeMode` is
-  `false` because safe-mode would skip the skill.
+  Claude/Codex default to an interactive Terminal hand-off; `runInTerminal:
+  false` is batch. Batch timeout is configurable (`timeoutSeconds`), defaulting
+  to 900s for providers and 300s for shell; Terminal is unsupervised and has no
+  timeout.
+  A Message can carry an optional skill (`skill: String?`), detected by
+  `SkillCatalog` from account/user/repository scopes (plus Claude plugins and
+  enabled Codex plugins) and prefixed at dispatch via `resolvedPromptText`
+  (`/skill …` for Claude, `$skill …` for Codex); with a skill present,
+  `resolvedSafeMode` is `false` because ignored Claude customizations would
+  skip the skill.
 - **Provider** — `claude` or `codex`, the axis that differentiates account
   discovery, window detection and dispatch (`Provider.swift`). Detected by
   folder *content*, not name (`Provider.detect(at:)`): `.claude.json` →
   claude; else `auth.json` → codex; else `projects/` → claude; else
   `sessions/` → codex; else no signature (`nil`). Each provider carries its
-  own transcripts subpath (`projects`/`sessions`), env var
-  (`CLAUDE_CONFIG_DIR`/`CODEX_HOME`) and CLI binary name.
+  own transcripts subpath (`projects`/`sessions`), account-environment rules
+  (not merely an unconditional env var) and CLI binary name. The provider of a
+  registered custom account is persisted and passed explicitly to quota
+  consumers, so a missing or temporarily ambiguous folder cannot silently
+  change provider.
 ## Architecture map
 
 - `AppState.swift` — central observable state and UserDefaults persistence for
   unified agendamentos. Pause is per account: `pausedAccounts: Set<String>`
-  (standardized paths, persisted). `windowEnds: [URL: Date]` (not persisted)
+  (canonical paths, persisted). Typed renewal recovery
+  (`cooldown`/`retry`/`needsAttention`) is keyed by task UID + intended
+  canonical account and persisted across restarts. It remains attached while
+  a custom folder is offline and across a downgrade that cannot decode a
+  future task; corrupt entries fail closed rather than enabling another
+  bootstrap. `windowEnds: [URL: Date]` (not persisted)
   holds the detected 5h-window end per scheduled account, published by
-  `AppEnvironment.refreshWindowEnds()`. `accountFilter: URL?` is the deep-link
-  the menu panel sets to scope the Tasks/History tabs to one account
+  `AppEnvironment.refreshWindowEnds()`; `quotaUnavailableReasons` keeps
+  fail-closed detection distinct from an inactive window. `accountFilter:
+  URL?` is the deep-link the menu panel sets to scope the Tasks/History tabs
+  to one account
   (`taskMatchesFilter`/`matchesFilter`), with a clear-filter chip in both.
+  Account-provider registrations, notification privacy and the bounded history
+  are persisted; `clearHistory()` deletes the local history blob.
 - `AppEnvironment.swift` — composition root; wires both engines ↔ controller,
   observes sleep/wake and `$tasks` (single `reconfigureSchedules`: continuous
   agendamentos feed `RenewalEngine`, fixed ones `TaskScheduler`).
   `refreshWindowEnds()` queries the `SessionDetector` for every scheduled
   account and publishes `AppState.windowEnds`; called when the menu panel
-  opens, no timer of its own.
+  opens, no timer of its own. Runner/auth dependencies are injectable so
+  composition tests never depend on the developer's real CLIs/login.
 - `RenewalEngine.swift` — accounts with a continuous agendamento; per-account
-  timers armed at the detected window end, 120s dedupe, `pendingRetry` for
-  dispatches discarded by the controller's `isRunning` guard.
-- `SessionDetector.swift` — active window end from transcripts.
+  timers armed at the detected window end. When no valid window exists, it
+  bootstraps only with explicit consent. A delivered attempt creates a
+  persisted five-hour cooldown across restarts; a scheduled hand-off keeps its
+  recovery independently from bootstrap consent, and real transcript evidence
+  replaces either timer. Transient failures retry with bounded exponential
+  backoff measured from the returned failure and a fresh transcript check.
+  `needsAttention` blocks without a periodic alert/cooldown until evidence
+  appears or the executable task payload changes. Consent is revalidated
+  immediately before and after the async dispatch.
+- `SessionDetector.swift` — typed window state from transcripts:
+  `active(until:)`, conclusively `inactive`, or fail-closed
+  `unavailable(reason:)`. Production callers pass the persisted/request
+  provider explicitly; folder inference exists only as a legacy/test adapter.
 - `FireController.swift` — orchestrates one dispatch: only continuous renewal
   skips when a window is already active; fixed/manual runs always execute.
-  Records to history and applies the global `isRunning` guard. A paused
-  account (`AppState.isPaused`) silently discards Claude/Codex dispatches
-  (shell commands still run) without recording history; returns `true` so
-  engines don't retry via `pendingRetry` — resuming only picks up the next
-  scheduled event, never a catch-up for what was skipped while paused.
+  It returns typed `DispatchOutcome` values (`completed`, `launched`, `skipped`,
+  `paused`, `retryableFailure`, `needsAttention`). Runs are FIFO per
+  provider/account, while different accounts may advance concurrently; jobs
+  are never discarded by a global busy flag. Terminal hand-off records
+  `.launched`, never `.success`. Notification details are private by default
+  and only include prompt/response/error/account after explicit opt-in.
 - `Provider.swift` — the claude/codex axis: folder-content detection,
-  transcripts subpath, env var, CLI binary name, display name.
+  transcripts subpath, environment key, CLI binary name, display name.
 - `CommandRunner.swift` — subprocess: `claude -p --model … --effort …
-  [--safe-mode] "<prompt>"`, `codex exec [--model …] --sandbox read-only …
-  [-c model_reasoning_effort=…] "<prompt>"` (model/reasoning flags omitted when
-  unset → account default), or login-shell command; pins
-  `CLAUDE_CONFIG_DIR`/`CODEX_HOME` per dispatch; 60s timeout; the prompt comes
-  from `resolvedPromptText` (skill prefixed when present).
+  [--safe-mode]`, `codex exec [--model …] --sandbox read-only …
+  [-c model_reasoning_effort=…]` (model/reasoning flags omitted when unset →
+  account default), or login-shell command. Claude/Codex prompts come from
+  stdin, not argv; shell remains `-l -c`. `ProviderAccountContext` applies the
+  correct native/custom environment. Timeouts come from the message, output is
+  capped as UTF-8-safe head + tail, and timeout termination targets only
+  positive PIDs observed in the process tree (SIGTERM then best-effort
+  SIGKILL).
 - `TerminalLauncher.swift` — disparo interativo (`message.resolvedRunInTerminal`):
   abre uma sessão no Terminal.app via AppleScript rodando um `.sh` temporário
-  (auto-`rm`); fixa `CLAUDE_CONFIG_DIR`/`CODEX_HOME`, faz `cd` para o working dir
+  privado (0600, traps de auto-`rm`, limpeza de resíduos antigos); aplica o
+  contexto de conta correto e faz `cd` para o working dir
   (default `~/Library/Application Support/Ohayo/workspace` — nunca o home, cujo
-  trust não persiste). `seedTrust` pré-grava `projects[<dir>]` no `.claude.json` da
-  conta para o `claude` não-supervisionado nunca travar em prompt:
-  `hasTrustDialogAccepted` + `hasClaudeMdExternalIncludesApproved`/`…WarningShown`
-  (não há flag/env do CLI que auto-aprove imports externos de CLAUDE.md mantendo o
-  CLAUDE.md ativo). Usa o mesmo `resolvedPromptText` do batch; só Claude toca no
-  `.claude.json`, Codex nunca.
+  trust não persiste). `seedTrust` pré-grava apenas esse workspace controlado
+  pelo Ohayo em `projects[<dir>]` no `.claude.json`, somente com
+  `hasTrustDialogAccepted`; diretórios escolhidos/importados ficam intactos e
+  deixam o Claude controlar o prompt de trust no Terminal quando necessário.
+  Nunca pré-aprova imports externos de `CLAUDE.md`; esse consentimento também
+  permanece visível. Usa o
+  mesmo `resolvedPromptText` do batch; só Claude toca no `.claude.json`, Codex
+  nunca.
 - `AgendaMath.swift` — pure functions for the fixed cycle (times × weekdays):
   `nextOccurrence`, `lastMissedOccurrence` (single catch-up on wake), and
   `date(bySettingMinutes:ofDay:calendar:)`.
 - `TaskScheduler.swift` — per-agendamento timers (fixed ones) driven by
-  `AgendaMath`, mirrors `RenewalEngine`'s pattern (`pendingRetry` for
-  dispatches discarded by the controller's `isRunning` guard). Dedupe is by
-  fired-occurrence identity (never a wall-clock window — adjacent-minute
-  occurrences must both fire); creating/editing a task advances a catch-up
-  floor and never counts as a fire.
+  `AgendaMath`. Transient failures preserve the occurrence and retry with
+  bounded exponential backoff; needs-attention/paused/launched outcomes do not
+  become hot loops. Dedupe is by fired-occurrence identity (never a wall-clock
+  window — adjacent-minute occurrences must both fire); creating/editing a
+  task advances a catch-up floor and never counts as a fire.
+- `ProviderDoctor.swift` — passive first-run readiness model/view. It separates
+  optional vs configured provider, CLI availability and per-account auth for
+  native/custom accounts. Checks run Claude/Codex in parallel, preserve stable
+  display order and never execute a prompt or login.
+- `SkillCatalog.swift` — effective local skills from account/plugin roots plus
+  repository ancestors (`.claude/skills` or `.agents/skills`) and Codex user
+  `$HOME/.agents/skills`; ascent stops safely at the filesystem root.
+- `CodexPluginCatalog.swift` — read-only `codex plugin list --json` inventory
+  for the selected `CODEX_HOME`; only installed, enabled, local plugin roots
+  with matching manifests are exposed as `plugin:skill`. Responses are
+  generation-guarded in the form so an old account lookup cannot overwrite a
+  newer selection.
 - `SingleInstanceLock.swift` — `flock` on
   `~/Library/Application Support/Ohayo/instance.lock`. A second launch
   (dev binary or packaged .app) alerts and exits before `AppEnvironment`
@@ -134,7 +192,11 @@ globally-active message.
   deep-link, with a clear-filter chip) + `AgendamentoFormSheet`
   (fixed times as chips via `TimeChipsEditor`, 5h chain generator, day
   presets, next-fire preview), `HistoryTab` (also filterable by
-  `accountFilter`), `GeneralTab`).
+  `accountFilter`, distinguishes Terminal `.launched`, and clears all local
+  history behind a destructive confirmation), `GeneralTab` (including the
+  default-off sensitive-notification-details toggle). The first-run
+  `PermissionSetupView` embeds the passive Provider Doctor before the macOS
+  permission controls.
 
 ## Commands
 
@@ -143,15 +205,25 @@ swift build                     # must always compile between changes
 swift test                      # full suite
 swift test --filter <Class>     # focused
 swift run Ohayo                 # run the menu bar app locally
-./scripts/make-app.sh           # build/Ohayo.app (ad-hoc signed)
+./scripts/make-app.sh           # build/Ohayo.app (ad-hoc unless Developer ID env is set)
 ./scripts/make-dmg.sh           # build/Ohayo-<version>.dmg
 ```
 
+Public tag releases are fail-closed: all Developer ID + notary secrets are
+required, tag version must match `Info.plist`, the app is signed with hardened
+runtime and the Apple Events entitlement, and the app is universal
+(`arm64` + `x86_64`) with deployment target macOS 13. The DMG is
+verified/mounted, then notarized and stapled; the mounted distributed app must
+pass Gatekeeper and a launch smoke before upload. Local ad-hoc builds remain
+supported but are not Gatekeeper-ready. Set
+`OHAYO_UNIVERSAL_BUILD=1` to reproduce the universal build locally.
+
 ## Observability
 
-`os_log` no subsystem `io.github.hayashirafael.Ohayo` (categorias `agenda`/`fire`/`env`) marca só
-decisões e mudanças de estado — em especial o descarte por `isRunning` no
-`FireController` como `.error` (o "silenciador invisível"). Ao vivo:
+`os_log` no subsystem `io.github.hayashirafael.Ohayo` (categorias
+`agenda`/`fire`/`env`) marca só decisões e mudanças de estado — fila por conta,
+outcome tipado, bootstrap e retry/backoff — mantendo prompt como private. Ao
+vivo:
 
 ```bash
 log stream --predicate 'subsystem == "io.github.hayashirafael.Ohayo"' --level debug
@@ -163,11 +235,17 @@ log stream --predicate 'subsystem == "io.github.hayashirafael.Ohayo"' --level de
 - XCTest; test classes are `@MainActor` when touching `AppState`/engines.
 - TDD: write the failing test first. Tests use fakes (`Clock`,
   `SessionDetecting`) — never real timers or sleeps. Exceção:
-  `AppEnvironmentTests` exercita o `AppEnvironment` real (com `FireController`/
-  `TerminalLauncher` reais) via um `TaskScheduler` injetado que arma `NSTimer`
-  reais, então suas datas fake DEVEM ser bem no futuro (ano 2099) — uma data de
-  disparo no passado vence na hora no `RunLoop.main` e roda AppleScript de verdade
-  (abre Terminal / crasha o suite).
+  `AppEnvironmentTests` exercita a composição real com launcher/notifier/auth
+  injetados e um `TaskScheduler` que arma `NSTimer` reais, então datas fake
+  DEVEM ficar bem no futuro (ano 2099). O teste de composição de `CODEX_HOME`
+  também usa um `CommandRunner` real contra um script controlado, com timeout
+  máximo de 5s, para cobrir a borda que um spy de `CommandRunning` não observa.
+  Exceção separada e exclusiva a `CommandRunnerTests`: testes de contrato do
+  subprocesso real podem bloquear um processo para validar timeout,
+  SIGTERM/SIGKILL e encerramento da árvore de PIDs, comportamentos do Darwin que
+  um `Clock` fake não reproduz. Devem injetar timeout de no máximo 1s, limitar
+  qualquer observação pós-SIGKILL a 2s e nunca dormir para aguardar estado do
+  app.
 - Commit prefixes: `feat:` / `fix:` / `refactor:` / `docs:` / `test:`.
 - READMEs: `README.md` is English, `README.pt-br.md` is Portuguese (there is
   no `README.en.md`); keep them in sync and verify every behavioral claim

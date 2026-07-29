@@ -12,7 +12,38 @@ enum PermissionAccessStatus: Equatable {
     case failed(String)
 
     var allowsRequest: Bool {
-        self != .allowed && self != .unavailable
+        switch self {
+        case .notConfigured, .failed: return true
+        case .allowed, .denied, .unavailable: return false
+        }
+    }
+}
+
+enum PermissionSettingsDestination: Equatable {
+    case notifications
+    case terminalAutomation
+
+    var url: URL {
+        let value: String
+        switch self {
+        case .notifications:
+            value = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+        case .terminalAutomation:
+            value = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+        }
+        return URL(string: value)!
+    }
+}
+
+protocol PermissionSettingsOpening {
+    func open(_ destination: PermissionSettingsDestination)
+}
+
+struct SystemPermissionSettingsOpener: PermissionSettingsOpening {
+    var openURL: (URL) -> Void = { _ = NSWorkspace.shared.open($0) }
+
+    func open(_ destination: PermissionSettingsDestination) {
+        openURL(destination.url)
     }
 }
 
@@ -106,13 +137,16 @@ final class PermissionSetupModel: ObservableObject {
     private let notifications: NotificationPermissionClient
     private let terminal: TerminalAutomationClient
     private let loginItem: LoginItemManaging
+    private let settings: PermissionSettingsOpening
 
     init(notifications: NotificationPermissionClient = SystemNotificationPermissionClient(),
          terminal: TerminalAutomationClient = SystemTerminalAutomationClient(),
-         loginItem: LoginItemManaging = SystemLoginItemManager()) {
+         loginItem: LoginItemManaging = SystemLoginItemManager(),
+         settings: PermissionSettingsOpening = SystemPermissionSettingsOpener()) {
         self.notifications = notifications
         self.terminal = terminal
         self.loginItem = loginItem
+        self.settings = settings
         self.loginItemSupported = loginItem.isSupported
         self.loginItemEnabled = loginItem.isEnabled
     }
@@ -123,11 +157,17 @@ final class PermissionSetupModel: ObservableObject {
     }
 
     func requestNotifications() async {
+        guard notificationStatus.allowsRequest else { return }
         notificationStatus = await notifications.request()
     }
 
     func testTerminal() async {
+        guard terminalStatus.allowsRequest else { return }
         terminalStatus = await terminal.test()
+    }
+
+    func openSettings(_ destination: PermissionSettingsDestination) {
+        settings.open(destination)
     }
 
     func setLoginItemEnabled(_ enabled: Bool) {

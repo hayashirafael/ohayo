@@ -12,41 +12,64 @@ struct TerminalLaunchSpec: Equatable {
     /// Diretório de trabalho resolvido (o do workspace do app quando a
     /// mensagem não define um).
     let workingDir: String
+    /// Somente o workspace criado/controlado pelo Ohayo pode receber trust
+    /// automático. Projetos explícitos preservam o prompt do Claude.
+    let usesOhayoManagedWorkspace: Bool
 }
 
 struct TerminalLauncher: TerminalLaunching {
+    private static let temporaryScriptPrefix = "ohayo-terminal-"
+    private static let staleScriptAge: TimeInterval = 60 * 60
+
     var claudeBinaryOverride: URL?
     var codexBinaryOverride: URL?
+    var defaultWorkspaceOverride: URL?
     var appleScriptRunner: (String) -> Result<Void, RunnerError> = Self.runAppleScript
 
     func launch(_ message: Message) async -> Result<Void, RunnerError> {
+        Self.cleanupStaleScripts()
         guard let spec = Self.spec(
             for: message,
             claudeBinary: claudeBinaryOverride,
-            codexBinary: codexBinaryOverride
+            codexBinary: codexBinaryOverride,
+            defaultWorkspace: defaultWorkspaceOverride
         ) else {
             return .failure(.cliNotFound(message.kind == .codex ? .codex : .claude))
         }
-        // Garante o workspace padrão do app e pré-confia a pasta de trabalho
-        // na conta (mecanismo documentado do Claude Code) — sem isso o CLI
-        // interativo pede "do you trust this folder?" na primeira sessão.
-        // Falha aqui não impede o launch: no pior caso o prompt aparece.
+        // Garante o diretório de trabalho. Só o workspace padrão, criado e
+        // controlado pelo Ohayo, recebe trust automático; projetos escolhidos
+        // preservam o prompt visível do Claude no Terminal.
+        // Falha no seed não impede o launch: no pior caso o prompt aparece.
         try? FileManager.default.createDirectory(
             atPath: spec.workingDir, withIntermediateDirectories: true)
-        if message.kind == .claude {
+        if message.kind == .claude, spec.usesOhayoManagedWorkspace {
             Self.seedTrust(accountDir: spec.accountDir, workingDir: spec.workingDir)
         }
         // O script vai num arquivo temporário em vez de embutido no
         // `do script`: comandos longos (prompt grande, PATH inflado) chegavam
-        // truncados no Terminal e nunca executavam. A última linha apaga o
-        // próprio arquivo quando a sessão termina.
+        // truncados no Terminal e nunca executavam. O arquivo nasce privado
+        // (0600) e um trap o remove tanto no término normal quanto em sinais.
         let file = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ohayo-terminal-\(UUID().uuidString).sh")
-        let content = spec.terminalScript + "\nrm -f -- \(Self.shellQuote(file.path))\n"
-        do {
-            try content.write(to: file, atomically: true, encoding: .utf8)
-        } catch {
-            return .failure(.failed("falha ao gravar o script do terminal: \(error.localizedDescription)"))
+            .appendingPathComponent(
+                "\(Self.temporaryScriptPrefix)\(UUID().uuidString).sh"
+            )
+        let quotedFile = Self.shellQuote(file.path)
+        let content = [
+            "cleanup() { rm -f -- \(quotedFile); }",
+            "trap cleanup EXIT",
+            "trap 'exit 129' HUP",
+            "trap 'exit 130' INT",
+            "trap 'exit 143' TERM",
+            spec.terminalScript,
+            "",
+        ].joined(separator: "\n")
+        let created = FileManager.default.createFile(
+            atPath: file.path,
+            contents: Data(content.utf8),
+            attributes: [.posixPermissions: 0o600]
+        )
+        guard created else {
+            return .failure(.failed("falha ao gravar o script do terminal"))
         }
         let script = Self.appleScript(forTerminalScript: "/bin/sh \(Self.shellQuote(file.path))")
         let result = appleScriptRunner(script)
@@ -57,6 +80,32 @@ struct TerminalLauncher: TerminalLaunching {
             try? FileManager.default.removeItem(at: file)
         }
         return result
+    }
+
+    /// Remove resíduos de crashes sem tocar arquivos recentes que outro
+    /// disparo concorrente ainda pode estar entregando ao Terminal.
+    static func cleanupStaleScripts(
+        in directory: URL = FileManager.default.temporaryDirectory,
+        now: Date = Date(),
+        olderThan minimumAge: TimeInterval = staleScriptAge
+    ) {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        let cutoff = now.addingTimeInterval(-max(0, minimumAge))
+        for file in entries {
+            guard file.lastPathComponent.hasPrefix(temporaryScriptPrefix),
+                  file.pathExtension == "sh",
+                  let values = try? file.resourceValues(
+                    forKeys: [.contentModificationDateKey, .isRegularFileKey]
+                  ),
+                  values.isRegularFile == true,
+                  let modified = values.contentModificationDate,
+                  modified < cutoff else { continue }
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 
     static func spec(for message: Message,
@@ -90,39 +139,50 @@ struct TerminalLauncher: TerminalLaunching {
         }
         guard let binary else { return nil }
 
-        let home = NSHomeDirectory()
         let workingDir: String
-        if let wd = message.workingDir, !wd.trimmingCharacters(in: .whitespaces).isEmpty {
+        let usesOhayoManagedWorkspace: Bool
+        if let wd = message.workingDir,
+           !wd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             workingDir = NSString(string: wd).expandingTildeInPath
+            usesOhayoManagedWorkspace = false
         } else {
             // Nunca o home: o Claude Code não persiste o trust do home (vale
             // só pela sessão), então abrir lá pediria confirmação toda vez.
             workingDir = (defaultWorkspace ?? defaultWorkspaceDir).path
+            usesOhayoManagedWorkspace = true
         }
 
         let messageConfigDir = (message.configDir?.isEmpty == false)
             ? URL(fileURLWithPath: message.configDir!) : nil
-        let envKey = provider.envKey
-        let envValue: String
-        if provider == .codex {
-            envValue = (messageConfigDir
-                ?? URL(fileURLWithPath: home).appendingPathComponent(".codex")).path
-        } else {
-            envValue = (messageConfigDir
-                ?? URL(fileURLWithPath: home).appendingPathComponent(".claude")).path
-        }
+        let account = ProviderAccountContext(
+            provider: provider, configDirectory: messageConfigDir
+        )
+        let envValue = account.configDirectory.path
         // Sem `export PATH`: o Terminal abre um login shell com o PATH do
         // próprio usuário, e o binário é invocado por caminho absoluto —
         // exportar o PATH herdado do app (gigante quando lançado de um shell
         // poluído) truncava o comando.
         let command = ([binary.path] + args).map(shellQuote).joined(separator: " ")
+        let accountEnvironment: String
+        if provider == .claude, account.isNative {
+            // A conta nativa usa ~/.claude.json. Exportar
+            // CLAUDE_CONFIG_DIR=~/.claude faria a CLI procurar o login no
+            // caminho aninhado errado; o unset também limpa um perfil herdado.
+            accountEnvironment = "unset \(provider.envKey)"
+        } else {
+            accountEnvironment = "export \(provider.envKey)=\(shellQuote(envValue))"
+        }
         let terminalScript = [
-            "export \(envKey)=\(shellQuote(envValue))",
+            accountEnvironment,
             "cd \(shellQuote(workingDir))",
             command
         ].joined(separator: "; ")
-        return TerminalLaunchSpec(terminalScript: terminalScript,
-                                  accountDir: envValue, workingDir: workingDir)
+        return TerminalLaunchSpec(
+            terminalScript: terminalScript,
+            accountDir: envValue,
+            workingDir: workingDir,
+            usesOhayoManagedWorkspace: usesOhayoManagedWorkspace
+        )
     }
 
     /// Pasta neutra do app onde as sessões interativas abrem por padrão.
@@ -130,20 +190,26 @@ struct TerminalLauncher: TerminalLaunching {
         AppPaths.workspaceDirectory()
     }
 
-    /// Pré-aprova, no `.claude.json` da conta, os dois consentimentos que o
-    /// disparo não-supervisionado não pode responder à mão, ambos em
-    /// `projects["<pasta>"]`:
-    /// - `hasTrustDialogAccepted = true` — a confiança da pasta (trust dialog).
-    /// - `hasClaudeMdExternalIncludesApproved = true` +
-    ///   `hasClaudeMdExternalIncludesWarningShown = true` — o "Yes, allow
-    ///   external imports" (quando o CLAUDE.md importa arquivos fora do working
-    ///   dir, ex.: `@RTK.md`). Sem isso a sessão `claude` trava esperando Enter.
-    /// Não há flag/env do `claude` que responda "sim" a esses imports mantendo o
-    /// CLAUDE.md ativo (`--bare`/`--safe-mode` desligariam o CLAUDE.md); semear a
-    /// config é a única via. Preserva todo o resto do arquivo; não reescreve
-    /// quando as três chaves já estão `true`.
-    static func seedTrust(accountDir: String, workingDir: String) {
-        let url = URL(fileURLWithPath: accountDir).appendingPathComponent(".claude.json")
+    /// Pré-confia o workspace controlado pelo Ohayo em
+    /// `projects["<pasta>"]` no `.claude.json` da conta. O chamador deve
+    /// manter projetos explícitos fora deste helper.
+    /// O consentimento mais amplo para imports externos do CLAUDE.md não é
+    /// antecipado: quando aplicável, o Claude mantém seu diálogo visível no
+    /// Terminal para que a pessoa decida com os arquivos listados.
+    ///
+    /// Preserva todo o resto do arquivo e não reescreve quando o trust básico
+    /// já está aceito.
+    static func seedTrust(
+        accountDir: String,
+        workingDir: String,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) {
+        let account = ProviderAccountContext(
+            provider: .claude,
+            configDirectory: URL(fileURLWithPath: accountDir),
+            homeDirectory: homeDirectory
+        )
+        let url = account.identityFile
         // Canonicaliza a chave: o `claude` grava o trust sob o caminho que o
         // `getcwd` devolve depois do `cd` — símbolos resolvidos (/tmp →
         // /private/tmp), sem barra final nem segmentos `.`/`..`. Semear sob o
@@ -165,12 +231,8 @@ struct TerminalLauncher: TerminalLaunching {
         var projects = root["projects"] as? [String: Any] ?? [:]
         var entry = projects[workingDir] as? [String: Any] ?? [:]
         let trust = entry["hasTrustDialogAccepted"] as? Bool == true
-        let approved = entry["hasClaudeMdExternalIncludesApproved"] as? Bool == true
-        let warned = entry["hasClaudeMdExternalIncludesWarningShown"] as? Bool == true
-        if trust && approved && warned { return } // já tudo semeado
+        if trust { return }
         entry["hasTrustDialogAccepted"] = true
-        entry["hasClaudeMdExternalIncludesApproved"] = true
-        entry["hasClaudeMdExternalIncludesWarningShown"] = true
         projects[workingDir] = entry
         root["projects"] = projects
         if let data = try? JSONSerialization.data(withJSONObject: root) {

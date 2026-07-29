@@ -20,26 +20,51 @@ enum AccountIdentity {
 
     private struct JWTPayload: Decodable { let email: String? }
 
+    /// Arquivo que contém a identidade da conta. No Claude nativo ele é
+    /// `~/.claude.json`; somente perfis custom usam
+    /// `<CLAUDE_CONFIG_DIR>/.claude.json`.
+    static func identityFile(
+        forConfigDir dir: URL,
+        provider: Provider? = nil,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        let provider = provider ?? Provider.detect(at: dir) ?? .claude
+        return ProviderAccountContext(
+            provider: provider,
+            configDirectory: dir,
+            homeDirectory: homeDirectory
+        ).identityFile
+    }
+
     /// E-mail logado da conta, roteando pela assinatura do conteúdo da pasta.
-    /// Pasta sem assinatura cai no caminho Claude (o `.claude.json` ausente
-    /// devolve nil de qualquer forma).
-    static func email(forConfigDir dir: URL) -> String? {
-        switch Provider.detect(at: dir) ?? .claude {
-        case .claude: return claudeEmail(forConfigDir: dir)
-        case .codex: return codexEmail(forConfigDir: dir)
+    /// Pasta sem assinatura cai no caminho Claude.
+    static func email(
+        forConfigDir dir: URL,
+        provider: Provider? = nil,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> String? {
+        let provider = provider ?? Provider.detect(at: dir) ?? .claude
+        let file = identityFile(
+            forConfigDir: dir, provider: provider, homeDirectory: homeDirectory
+        )
+        switch provider {
+        case .claude: return claudeEmail(from: file)
+        case .codex: return codexEmail(from: file)
         }
     }
 
-    private static func claudeEmail(forConfigDir dir: URL) -> String? {
-        let url = dir.appendingPathComponent(".claude.json")
-        guard let data = try? Data(contentsOf: url),
+    private static func claudeEmail(from file: URL) -> String? {
+        guard let data = try? Data(contentsOf: file),
               let cfg = try? JSONDecoder().decode(ConfigFile.self, from: data) else { return nil }
         return cfg.oauthAccount?.emailAddress
     }
 
     static func codexEmail(forConfigDir dir: URL) -> String? {
-        let url = dir.appendingPathComponent("auth.json")
-        guard let data = try? Data(contentsOf: url),
+        codexEmail(from: dir.appendingPathComponent("auth.json"))
+    }
+
+    private static func codexEmail(from file: URL) -> String? {
+        guard let data = try? Data(contentsOf: file),
               let auth = try? JSONDecoder().decode(CodexAuthFile.self, from: data),
               let jwt = auth.tokens?.idToken else { return nil }
         return email(fromJWT: jwt)

@@ -41,14 +41,10 @@ cask "ohayo" do
   zap trash: "~/Library/Preferences/io.github.hayashirafael.Ohayo.plist"
 
   caveats <<~EOS
-    Ohayo is ad-hoc signed (not notarized — no paid Apple Developer account).
-    On first launch, macOS Gatekeeper will block it. To open it:
+    Interactive Claude/Codex tasks open Terminal. On first use, macOS may ask
+    you to allow Ohayo to automate Terminal in:
 
-      System Settings → Privacy & Security → "Open Anyway"
-
-    or clear the quarantine flag yourself:
-
-      xattr -dr com.apple.quarantine "#{appdir}/Ohayo.app"
+      System Settings → Privacy & Security → Automation
   EOS
 end
 RUBY

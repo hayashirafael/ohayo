@@ -63,6 +63,46 @@ final class TaskSchedulerTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    func testWakeDuranteDisparoNaoDuplicaMesmaOcorrencia() async {
+        let clock = MutableClock(date(2026, 7, 9, 7, 0))
+        let scheduler = TaskScheduler(clock: clock, calendar: cal)
+        var count = 0
+        var entered = false
+        var enteredWaiter: CheckedContinuation<Void, Never>?
+        var release: CheckedContinuation<Void, Never>?
+        scheduler.onFire = { _ in
+            count += 1
+            guard count == 1 else { return true }
+            entered = true
+            enteredWaiter?.resume()
+            enteredWaiter = nil
+            await withCheckedContinuation { release = $0 }
+            return true
+        }
+        let scheduled = task(times: [480])
+        await scheduler.configure(tasks: [scheduled], paused: false)
+        clock.now = date(2026, 7, 9, 8, 1)
+
+        let first = Task { @MainActor in
+            await scheduler.handleWake()
+        }
+        if !entered {
+            await withCheckedContinuation { enteredWaiter = $0 }
+        }
+
+        await scheduler.rearmAll()
+        XCTAssertEqual(count, 1)
+
+        release?.resume()
+        release = nil
+        await first.value
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(
+            scheduler.nextFires[scheduled.uid],
+            date(2026, 7, 10, 8, 0)
+        )
+    }
+
     func testPausaLimpaTimersEStatus() async {
         let clock = MutableClock(date(2026, 7, 9, 7, 0))
         let scheduler = TaskScheduler(clock: clock, calendar: cal)
@@ -218,18 +258,20 @@ final class TaskSchedulerTests: XCTestCase {
         XCTAssertEqual(scheduler.nextFires[t.uid], date(2026, 7, 10, 12, 5))
     }
 
-    func testFireDescartadoPeloGuardEntraEmRetry() async {
+    func testFalhaTransitoriaEntraEmRetryComBackoff() async {
         let clock = MutableClock(date(2026, 7, 9, 7, 0))
         let scheduler = TaskScheduler(clock: clock, calendar: cal)
-        var results: [Bool] = [false, true] // 1ª tentativa descartada, 2ª executa
+        var results: [Bool] = [false, true]
         var count = 0
         scheduler.onFire = { _ in count += 1; return results.removeFirst() }
         let t = task(times: [480])
         await scheduler.configure(tasks: [t], paused: false)
         clock.now = date(2026, 7, 9, 8, 1)
-        await scheduler.handleWake()   // dispara, é descartado → pendingRetry
+        await scheduler.handleWake()
+        await scheduler.rearmAll()
+        XCTAssertEqual(count, 1, "não pode repetir antes do backoff")
         clock.now = date(2026, 7, 9, 8, 2)
-        await scheduler.rearmAll()     // retry executa
+        await scheduler.rearmAll()
         XCTAssertEqual(count, 2)
     }
 
@@ -350,11 +392,9 @@ final class TaskSchedulerTests: XCTestCase {
         XCTAssertEqual(scheduler.nextFires[t.uid], date(2026, 7, 10, 12, 44))
     }
 
-    func testRetryPendenteReDisparaQuandoGuardLiberaESemRefireDepois() async {
-        // Um disparo descartado pelo guard do controller (onFire=false) fica em
-        // pendingRetry; a próxima chamada re-tenta a MESMA ocorrência. Quando o
-        // guard libera, dispara — e depois disso a ocorrência não re-dispara
-        // (encadeia a próxima e o dedupe segura wakes extras).
+    func testRetryPendenteReDisparaAposBackoffESemRefireDepois() async {
+        // Uma falha transitória preserva a MESMA ocorrência. Após o backoff,
+        // dispara — e depois disso a ocorrência não re-dispara.
         let clock = MutableClock(date(2026, 7, 9, 7, 0))
         let scheduler = TaskScheduler(clock: clock, calendar: cal)
         var permite = false
@@ -364,11 +404,14 @@ final class TaskSchedulerTests: XCTestCase {
         await scheduler.configure(tasks: [t], paused: false)
 
         clock.now = date(2026, 7, 9, 9, 0)   // dormiu através das 08:00
-        await scheduler.handleWake()          // catch-up dispara, guard nega → pendingRetry
+        await scheduler.handleWake()
         XCTAssertEqual(count, 1)
 
         permite = true
-        await scheduler.handleWake()          // consome o pendingRetry → re-dispara
+        await scheduler.handleWake()
+        XCTAssertEqual(count, 1)
+        clock.now = date(2026, 7, 9, 9, 1)
+        await scheduler.handleWake()
         XCTAssertEqual(count, 2)
         XCTAssertEqual(scheduler.nextFires[t.uid], date(2026, 7, 10, 8, 0)) // encadeou
 

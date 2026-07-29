@@ -2,6 +2,18 @@ import XCTest
 @testable import Ohayo
 
 final class MessageSkillTests: XCTestCase {
+    func testCodexReasoningIncluiXHighComoValorPersistivel() throws {
+        XCTAssertEqual(
+            Message.CodexReasoning.allCases,
+            [.minimal, .low, .medium, .high, .xhigh]
+        )
+
+        let data = try JSONEncoder().encode(Message(
+            text: "analise", kind: .codex, codexReasoning: .xhigh))
+        let decoded = try JSONDecoder().decode(Message.self, from: data)
+        XCTAssertEqual(decoded.codexReasoning, .xhigh)
+    }
+
     func testPromptSemSkillEhOTexto() {
         XCTAssertEqual(Message(text: "1+1", kind: .claude).resolvedPromptText, "1+1")
     }

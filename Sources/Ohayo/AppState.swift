@@ -2,18 +2,21 @@ import Foundation
 
 @MainActor
 final class AppState: ObservableObject {
-    /// Contas pausadas (path padronizado). O pause é por conta: os engines
-    /// continuam armando timers; o FireController descarta o disparo.
+    /// Contas pausadas (path canônico). O pause é por conta e remove seus
+    /// agendamentos dos engines; o FireController mantém um segundo guard para
+    /// cobrir corridas com um disparo que já estava em andamento.
     @Published var pausedAccounts: Set<String> {
         didSet { defaults.set(Array(pausedAccounts), forKey: Keys.pausedAccounts) }
     }
 
     func isPaused(_ dir: URL) -> Bool {
-        pausedAccounts.contains(dir.standardizedFileURL.path)
+        pausedAccounts.contains(
+            ProviderAccountContext.canonicalAccountDirectory(dir).path
+        )
     }
 
     func setPaused(_ dir: URL, _ on: Bool) {
-        let key = dir.standardizedFileURL.path
+        let key = ProviderAccountContext.canonicalAccountDirectory(dir).path
         if on { pausedAccounts.insert(key) } else { pausedAccounts.remove(key) }
     }
 
@@ -45,6 +48,12 @@ final class AppState: ObservableObject {
         // 60s entre o último tick do heartbeat e um quit logo após o disparo
         // (evita falso "perdido" de ocorrência que na verdade executou).
         recordAlive(now: event.date)
+    }
+
+    /// Remove o histórico local e o blob persistido. Credenciais e
+    /// agendamentos não são afetados.
+    func clearHistory() {
+        history.removeAll()
     }
 
     /// Cria um evento com um snapshot mínimo da identidade. A UI prefere os
@@ -95,14 +104,27 @@ final class AppState: ObservableObject {
 
     private func explicitOrDefaultAccount(for message: Message, provider: Provider) -> URL {
         if let path = message.configDir, !path.isEmpty {
-            return URL(fileURLWithPath: path).standardizedFileURL
+            return ProviderAccountContext.canonicalAccountDirectory(
+                URL(fileURLWithPath: path)
+            )
         }
-        return provider == .codex ? Self.defaultCodexConfigDir : Self.defaultConfigDir
+        return ProviderAccountContext.canonicalAccountDirectory(
+            defaultConfigDirectory(for: provider)
+        )
+    }
+
+    private func defaultConfigDirectory(for provider: Provider) -> URL {
+        ProviderAccountContext.defaultConfigDirectory(
+            for: provider,
+            homeDirectory: homeDirectory
+        )
     }
 
     private func accountDir(for event: FireEvent) -> URL? {
         if let path = event.accountPath, !path.isEmpty {
-            return URL(fileURLWithPath: path).standardizedFileURL
+            return ProviderAccountContext.canonicalAccountDirectory(
+                URL(fileURLWithPath: path)
+            )
         }
         return nil
     }
@@ -139,13 +161,18 @@ final class AppState: ObservableObject {
     /// enquanto a sonda de launch resolve.
     @Published var cliFound: [Provider: Bool] = [.claude: true, .codex: true]
 
-    /// CLIs ausentes que importam: Claude sempre; Codex só quando alguma conta
-    /// Codex está em renovação ou alguma tarefa da agenda usa Codex.
+    /// CLIs ausentes que importam: somente providers com conta descoberta ou
+    /// com algum agendamento habilitado. Um usuário Codex/shell não recebe um
+    /// alerta de instalação do Claude sem nunca tê-lo configurado.
     var missingCLIs: [Provider] {
         Provider.allCases.filter { p in
             guard cliFound[p] == false else { return false }
-            if p == .claude { return true }
-            return tasks.contains { $0.enabled && $0.resolvedCommand.kind == .codex }
+            let expectedKind: Message.Kind = p == .claude ? .claude : .codex
+            let usedByTask = tasks.contains {
+                $0.enabled && $0.resolvedCommand.kind == expectedKind
+            }
+            let hasAccount = discoverAccounts().contains { provider(for: $0) == p }
+            return usedByTask || hasAccount
         }
     }
 
@@ -175,6 +202,17 @@ final class AppState: ObservableObject {
         didSet { defaults.set(showRemainingInBar, forKey: Keys.showRemainingInBar) }
     }
 
+    /// Conteúdo de prompts, respostas, erros e contas pode aparecer na tela
+    /// bloqueada. O default é privado; a pessoa precisa optar pelos detalhes.
+    @Published var showSensitiveNotificationDetails: Bool {
+        didSet {
+            defaults.set(
+                showSensitiveNotificationDetails,
+                forKey: Keys.showSensitiveNotificationDetails
+            )
+        }
+    }
+
     /// Quantos próximos disparos o painel do menu mostra (1–5, padrão 1).
     @Published var panelUpcomingCount: Int {
         didSet { defaults.set(panelUpcomingCount, forKey: Keys.panelUpcomingCount) }
@@ -201,13 +239,18 @@ final class AppState: ObservableObject {
 
     func matchesFilter(_ event: FireEvent) -> Bool {
         guard let filter = accountFilter else { return true }
-        if let path = event.accountPath { return path == filter.standardizedFileURL.path }
+        if let path = event.accountPath {
+            return ProviderAccountContext.canonicalAccountDirectory(
+                URL(fileURLWithPath: path)
+            ) == ProviderAccountContext.canonicalAccountDirectory(filter)
+        }
         return event.account == filter.lastPathComponent
     }
 
     func taskMatchesFilter(_ task: ScheduledTask) -> Bool {
         guard let filter = accountFilter else { return true }
-        return accountDir(for: task) == filter.standardizedFileURL
+        return intendedAccountDir(for: task)
+            == ProviderAccountContext.canonicalAccountDirectory(filter)
     }
 
     // nonisolated: valores imutáveis usados fora do ator (ex.:
@@ -228,7 +271,131 @@ final class AppState: ObservableObject {
 
     /// Agendamentos (seção Horários) — a lista unificada.
     @Published var tasks: [ScheduledTask] {
-        didSet { defaults.set(try? JSONEncoder().encode(tasks), forKey: Keys.tasks) }
+        didSet {
+            defaults.set(try? JSONEncoder().encode(tasks), forKey: Keys.tasks)
+            var live: [String: ScheduledTask] = [:]
+            for task in tasks {
+                if let key = continuousKey(for: task), live[key] == nil {
+                    live[key] = task
+                }
+            }
+            var oldByUID: [UUID: ScheduledTask] = [:]
+            for task in oldValue where oldByUID[task.uid] == nil {
+                oldByUID[task.uid] = task
+            }
+            renewalRecoveryStates = renewalRecoveryStates.filter { key, state in
+                guard let task = live[key] else { return false }
+                if state.bootstrapOrigin,
+                   !task.resolvedBootstrapWhenInactive {
+                    return false
+                }
+                // Uma edição explícita é a oportunidade de corrigir um estado
+                // needs-attention/retry. Não carrega o bloqueio para um payload
+                // que a pessoa acabou de alterar.
+                if let previous = oldByUID[task.uid],
+                   previous.renewalRevision != task.renewalRevision {
+                    return false
+                }
+                return true
+            }
+        }
+    }
+
+    /// Evita duplicar um bootstrap logo após restart enquanto o Terminal/CLI
+    /// ainda pode estar iniciando ou antes de o transcript aparecer.
+    static let bootstrapCooldown: TimeInterval = 5 * 3600
+
+    private var renewalRecoveryStates: [String: RenewalRecoveryState] {
+        didSet {
+            defaults.set(
+                try? JSONEncoder().encode(renewalRecoveryStates),
+                forKey: Keys.renewalRecoveryStates
+            )
+        }
+    }
+
+    func shouldBootstrap(
+        _ task: ScheduledTask,
+        now: Date = Date()
+    ) -> Bool {
+        guard task.resolvedBootstrapWhenInactive,
+              let key = continuousKey(for: task) else {
+            return false
+        }
+        switch renewalRecoveryStates[key] {
+        case .none:
+            return true
+        case .cooldown(let notBefore, _):
+            return now >= notBefore
+        case .retry, .needsAttention:
+            return false
+        }
+    }
+
+    func bootstrapNotBefore(_ task: ScheduledTask) -> Date? {
+        guard task.resolvedBootstrapWhenInactive,
+              let key = continuousKey(for: task),
+              case .cooldown(let notBefore, _) = renewalRecoveryStates[key] else {
+            return nil
+        }
+        return notBefore
+    }
+
+    func recordBootstrapAttempt(
+        _ task: ScheduledTask,
+        at date: Date = Date()
+    ) {
+        setRenewalRecoveryState(
+            .cooldown(
+                notBefore: date.addingTimeInterval(Self.bootstrapCooldown),
+                bootstrapOrigin: true
+            ),
+            for: task
+        )
+    }
+
+    /// Adapter legado: remove somente recovery originado por bootstrap. O
+    /// engine novo grava retry/cooldown tipados via
+    /// `setRenewalRecoveryState(_:for:)`.
+    func clearBootstrapAttempt(_ task: ScheduledTask) {
+        guard let key = continuousKey(for: task),
+              renewalRecoveryStates[key]?.bootstrapOrigin == true else {
+            return
+        }
+        renewalRecoveryStates[key] = nil
+    }
+
+    func renewalRecoveryState(
+        for task: ScheduledTask
+    ) -> RenewalRecoveryState? {
+        guard let key = continuousKey(for: task) else { return nil }
+        return renewalRecoveryStates[key]
+    }
+
+    func setRenewalRecoveryState(
+        _ recovery: RenewalRecoveryState?,
+        for task: ScheduledTask
+    ) {
+        guard let key = continuousKey(for: task) else { return }
+        if let recovery,
+           recovery.bootstrapOrigin,
+           !task.resolvedBootstrapWhenInactive {
+            renewalRecoveryStates[key] = nil
+            return
+        }
+        renewalRecoveryStates[key] = recovery
+    }
+
+    private func continuousKey(for task: ScheduledTask) -> String? {
+        guard task.enabled,
+              task.repetition == .continuous else {
+            return nil
+        }
+        // Recovery acompanha o alvo pretendido mesmo se um volume custom
+        // estiver temporariamente offline. A elegibilidade de execução segue
+        // usando `accountDir(for:)`, que corretamente exige a pasta presente.
+        guard let account = intendedAccountDir(for: task) else { return nil }
+        return "\(task.uid.uuidString)|\(ProviderAccountContext.canonicalAccountDirectory(account).path)"
     }
 
     /// Diretório de config padrão do Claude Code (`~/.claude`).
@@ -244,13 +411,40 @@ final class AppState: ObservableObject {
     /// Cache de sessão do provider por conta (detect toca o disco; UI re-renderiza).
     private var providerCache: [String: Provider] = [:]
 
-    /// Provider da conta pela assinatura do conteúdo, com cache por path.
-    /// Fallback `.claude` para pasta sem assinatura (ex.: `~/.claude` recém-criado)
-    /// — o app é sobre contas Claude antes de tudo.
+    /// Provider persistido de contas custom. Sem isso, uma conta Codex cuja
+    /// pasta sumiu seria reinterpretada como Claude no próximo launch.
+    private var registeredAccountProviders: [String: String] = [:] {
+        didSet {
+            defaults.set(registeredAccountProviders, forKey: Keys.registeredAccountProviders)
+        }
+    }
+
+    /// Provider da conta pela assinatura do conteúdo, depois pelo cadastro
+    /// persistido. O fallback só vale para uma pasta realmente desconhecida.
     func provider(for dir: URL) -> Provider {
-        let key = dir.standardizedFileURL.path
+        let canonical = ProviderAccountContext.canonicalAccountDirectory(dir)
+        let key = canonical.path
         if let cached = providerCache[key] { return cached }
-        let value = Provider.detect(at: dir) ?? .claude
+        if let raw = registeredAccountProviders[key],
+           let persisted = Provider(rawValue: raw) {
+            providerCache[key] = persisted
+            return persisted
+        }
+        if let detected = Provider.detect(at: canonical) {
+            providerCache[key] = detected
+            if registeredAccounts.contains(key),
+               registeredAccountProviders[key] != detected.rawValue {
+                registeredAccountProviders[key] = detected.rawValue
+            }
+            return detected
+        }
+        let nativeCodex = ProviderAccountContext.canonicalAccountDirectory(
+            ProviderAccountContext.defaultConfigDirectory(
+                for: .codex,
+                homeDirectory: homeDirectory
+            )
+        ).path
+        let value: Provider = key == nativeCodex ? .codex : .claude
         providerCache[key] = value
         return value
     }
@@ -261,23 +455,66 @@ final class AppState: ObservableObject {
         didSet { defaults.set(registeredAccounts, forKey: Keys.registeredAccounts) }
     }
 
-    /// Contas exibidas: `~/.claude` sempre (comportamento atual); `~/.codex`
-    /// quando existe com assinatura Codex; cadastradas sempre (se a pasta sumiu,
-    /// a UI avisa em vez de esconder). Ordenado por provider (Claude primeiro)
-    /// e rótulo.
+    /// Contas exibidas: defaults somente quando existem; cadastradas sempre
+    /// (se a pasta sumiu, a UI avisa em vez de esconder). Ordenado por provider
+    /// (Claude primeiro) e rótulo.
     func discoverAccounts() -> [URL] {
-        var found: Set<URL> = [Self.defaultConfigDir.standardizedFileURL]
-        if Provider.detect(at: Self.defaultCodexConfigDir) == .codex {
-            found.insert(Self.defaultCodexConfigDir.standardizedFileURL)
+        let claudeDefault = ProviderAccountContext.canonicalAccountDirectory(
+            ProviderAccountContext.defaultConfigDirectory(
+                for: .claude, homeDirectory: homeDirectory
+            )
+        )
+        let codexDefault = ProviderAccountContext.canonicalAccountDirectory(
+            ProviderAccountContext.defaultConfigDirectory(
+                for: .codex, homeDirectory: homeDirectory
+            )
+        )
+        var found: Set<URL> = []
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(
+            atPath: claudeDefault.path, isDirectory: &isDirectory
+        ), isDirectory.boolValue {
+            found.insert(claudeDefault)
+        }
+        if Provider.detect(at: codexDefault) == .codex {
+            found.insert(codexDefault)
         }
         for path in registeredAccounts {
-            found.insert(URL(fileURLWithPath: path).standardizedFileURL)
+            found.insert(ProviderAccountContext.canonicalAccountDirectory(
+                URL(fileURLWithPath: path)
+            ))
         }
         return found.sorted { a, b in
             let (pa, pb) = (provider(for: a), provider(for: b))
             if pa != pb { return pa == .claude } // Claude primeiro
             return label(for: a).localizedCaseInsensitiveCompare(label(for: b)) == .orderedAscending
         }
+    }
+
+    /// Descoberta única do primeiro launch: perfis Claude adicionais pela
+    /// convenção `~/.claude*` que já tenham `projects/`. O resultado é
+    /// persistido em `registeredAccounts`; launches posteriores não revarrem o
+    /// home e contas removidas continuam visíveis para diagnóstico.
+    private static func initialClaudeAccountScan(home: URL) -> [String] {
+        let fm = FileManager.default
+        let native = ProviderAccountContext.canonicalAccountDirectory(
+            home.appendingPathComponent(".claude")
+        )
+        guard let names = try? fm.contentsOfDirectory(atPath: home.path) else { return [] }
+        var discovered: Set<URL> = []
+        for name in names.sorted() {
+            guard name.hasPrefix(".claude") else { continue }
+            let directory = ProviderAccountContext.canonicalAccountDirectory(
+                home.appendingPathComponent(name)
+            )
+            guard directory != native else { continue }
+            var isDirectory: ObjCBool = false
+            let projects = directory.appendingPathComponent("projects")
+            guard fm.fileExists(atPath: projects.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else { continue }
+            discovered.insert(directory)
+        }
+        return discovered.map(\.path).sorted()
     }
 
     /// Contas de um provider, na ordem de discoverAccounts.
@@ -289,13 +526,21 @@ final class AppState: ObservableObject {
     /// inferido pela assinatura, ou nil (pasta inválida — nada é persistido).
     @discardableResult
     func registerAccount(_ dir: URL) -> Provider? {
-        guard let detected = Provider.detect(at: dir) else { return nil }
-        let key = dir.standardizedFileURL.path
+        let canonical = ProviderAccountContext.canonicalAccountDirectory(dir)
+        guard let detected = Provider.detect(at: canonical) else { return nil }
+        let key = canonical.path
         providerCache[key] = detected
-        let defaultPaths = [Self.defaultConfigDir.standardizedFileURL.path,
-                            Self.defaultCodexConfigDir.standardizedFileURL.path]
+        let defaultPaths = Set(Provider.allCases.map {
+            ProviderAccountContext.canonicalAccountDirectory(
+                ProviderAccountContext.defaultConfigDirectory(
+                    for: $0,
+                    homeDirectory: homeDirectory
+                )
+            ).path
+        })
         if !registeredAccounts.contains(key), !defaultPaths.contains(key) {
             registeredAccounts.append(key)
+            registeredAccountProviders[key] = detected.rawValue
         }
         return detected
     }
@@ -303,12 +548,16 @@ final class AppState: ObservableObject {
     /// Remove uma conta cadastrada da lista — não toca o disco; limpa o
     /// apelido e desabilita os agendamentos que miravam a conta.
     func unregisterAccount(_ dir: URL) {
-        let key = dir.standardizedFileURL.path
+        let key = ProviderAccountContext.canonicalAccountDirectory(dir).path
         registeredAccounts.removeAll { $0 == key }
+        registeredAccountProviders[key] = nil
+        providerCache[key] = nil
         aliases[key] = nil
         for i in tasks.indices {
             if let cfg = tasks[i].resolvedCommand.configDir,
-               URL(fileURLWithPath: cfg).standardizedFileURL.path == key {
+               ProviderAccountContext.canonicalAccountDirectory(
+                   URL(fileURLWithPath: cfg)
+               ).path == key {
                 tasks[i].enabled = false
             }
         }
@@ -331,27 +580,47 @@ final class AppState: ObservableObject {
             var isDir: ObjCBool = false
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
                   isDir.boolValue else { return nil }
-            return url.standardizedFileURL
+            return ProviderAccountContext.canonicalAccountDirectory(url)
         }
-        return (cmd.kind == .codex ? Self.defaultCodexConfigDir : Self.defaultConfigDir)
-            .standardizedFileURL
+        return ProviderAccountContext.canonicalAccountDirectory(
+            defaultConfigDirectory(for: cmd.kind == .codex ? .codex : .claude)
+        )
+    }
+
+    /// Identidade pretendida da conta, independente de ela estar montada
+    /// agora. Usada por recovery, filtros e detecção de conflitos; execução
+    /// continua exigindo `accountDir(for:)`.
+    func intendedAccountDir(for task: ScheduledTask) -> URL? {
+        let command = task.resolvedCommand
+        guard command.kind != .shell else { return nil }
+        let provider: Provider =
+            command.kind == .codex ? .codex : .claude
+        return explicitOrDefaultAccount(
+            for: command,
+            provider: provider
+        )
     }
 
     /// Agendamentos habilitados que miram a conta — o "N agendamentos ativos"
     /// da aba Contas.
     func activeScheduleCount(for dir: URL) -> Int {
-        let key = dir.standardizedFileURL
-        return tasks.filter { $0.enabled && accountDir(for: $0) == key }.count
+        let key = ProviderAccountContext.canonicalAccountDirectory(dir)
+        return tasks.filter {
+            $0.enabled && intendedAccountDir(for: $0) == key
+        }.count
     }
 
     /// Já existe outro agendamento contínuo habilitado mirando a mesma conta?
     /// (Dois contínuos na mesma conta disparariam em dobro a cada janela.)
     func hasContinuousConflict(_ candidate: ScheduledTask) -> Bool {
-        guard candidate.repetition == .continuous,
-              let dir = accountDir(for: candidate) else { return false }
+        guard candidate.enabled,
+              candidate.repetition == .continuous,
+              let dir = intendedAccountDir(for: candidate) else {
+            return false
+        }
         return tasks.contains {
             $0.uid != candidate.uid && $0.enabled && $0.repetition == .continuous
-                && accountDir(for: $0) == dir
+                && intendedAccountDir(for: $0) == dir
         }
     }
 
@@ -361,8 +630,10 @@ final class AppState: ObservableObject {
     @discardableResult
     func setTaskEnabled(_ task: ScheduledTask, _ on: Bool) -> Bool {
         guard let idx = tasks.firstIndex(where: { $0.uid == task.uid }) else { return false }
-        if on, tasks[idx].repetition == .continuous, hasContinuousConflict(tasks[idx]) {
-            return false
+        if on, tasks[idx].repetition == .continuous {
+            var enabledCandidate = tasks[idx]
+            enabledCandidate.enabled = true
+            if hasContinuousConflict(enabledCandidate) { return false }
         }
         tasks[idx].enabled = on
         return true
@@ -403,26 +674,37 @@ final class AppState: ObservableObject {
 
     /// E-mail logado na conta (oauthAccount.emailAddress), com cache.
     func email(for dir: URL) -> String? {
-        let key = dir.standardizedFileURL.path
-        let identityFile = dir.appendingPathComponent(
-            provider(for: dir) == .codex ? "auth.json" : ".claude.json")
+        let canonical = ProviderAccountContext.canonicalAccountDirectory(dir)
+        let key = canonical.path
+        let provider = provider(for: canonical)
+        let identityFile = AccountIdentity.identityFile(
+            forConfigDir: canonical,
+            provider: provider,
+            homeDirectory: homeDirectory
+        )
         let modificationDate = try? identityFile.resourceValues(
             forKeys: [.contentModificationDateKey]).contentModificationDate
         if let cached = emailCache[key], cached.modificationDate == modificationDate {
             return cached.value
         }
-        let value = AccountIdentity.email(forConfigDir: dir)
+        let value = AccountIdentity.email(
+            forConfigDir: canonical,
+            provider: provider,
+            homeDirectory: homeDirectory
+        )
         emailCache[key] = EmailCacheEntry(modificationDate: modificationDate, value: value)
         return value
     }
 
     func alias(for dir: URL) -> String? {
-        let a = aliases[dir.standardizedFileURL.path]
+        let a = aliases[
+            ProviderAccountContext.canonicalAccountDirectory(dir).path
+        ]
         return (a?.isEmpty ?? true) ? nil : a
     }
 
     func setAlias(_ dir: URL, _ alias: String?) {
-        let key = dir.standardizedFileURL.path
+        let key = ProviderAccountContext.canonicalAccountDirectory(dir).path
         let trimmed = alias?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmed, !trimmed.isEmpty { aliases[key] = trimmed } else { aliases[key] = nil }
     }
@@ -439,37 +721,171 @@ final class AppState: ObservableObject {
     /// quando o painel abre (não persistido; os cards derivam o "restante").
     @Published var windowEnds: [URL: Date] = [:]
 
+    /// Falhas fail-closed da fonte de quota, não persistidas. A UI nunca
+    /// apresenta esses casos como simples ausência de janela.
+    @Published var quotaUnavailableReasons: [URL: String] = [:]
+
+    /// Contas contínuas bloqueadas por autenticação, CLI, permissão ou
+    /// configuração. Não há timer oculto: a UI pede ação da pessoa.
+    @Published var renewalNeedsAttention: Set<URL> = []
+
     /// Conta efetiva de uma mensagem: o override se for diretório válido, senão
     /// a conta padrão embutida do provider da mensagem (~/.claude ou ~/.codex).
     /// Nunca aponta para conta fantasma.
     func effectiveConfigDir(for message: Message) -> URL {
-        let fallback = message.kind == .codex ? Self.defaultCodexConfigDir : Self.defaultConfigDir
+        let fallback = defaultConfigDirectory(
+            for: message.kind == .codex ? .codex : .claude
+        )
         guard let path = message.configDir, !path.isEmpty else { return fallback }
         let url = URL(fileURLWithPath: path)
         var isDir: ObjCBool = false
         let ok = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
-        return ok ? url.standardizedFileURL : fallback
+        return ProviderAccountContext.canonicalAccountDirectory(
+            ok ? url : fallback
+        )
     }
 
     private let defaults: UserDefaults
+    private let homeDirectory: URL
     private enum Keys {
         static let pausedAccounts = "pausedAccounts"
         static let history = "history"
         static let showRemainingInBar = "showRemainingInBar"
+        static let showSensitiveNotificationDetails = "showSensitiveNotificationDetails"
         static let panelUpcomingCount = "panelUpcomingCount"
         static let aliases = "aliases"
         static let registeredAccounts = "registeredAccounts"
+        static let registeredAccountProviders = "registeredAccountProviders"
         static let tasks = "tasks"
+        static let renewalRecoveryStates = "renewalRecoveryStates"
+        /// Migração de builds que persistiam somente a data do bootstrap.
+        static let bootstrapAttempts = "bootstrapAttempts"
         static let language = "language"
         static let lastAliveAt = "lastAliveAt"
         static let hasDismissedPermissionGuide = "hasDismissedPermissionGuide"
     }
 
+    private static func canonicalPath(_ path: String) -> String {
+        ProviderAccountContext.canonicalAccountDirectory(
+            URL(fileURLWithPath: path)
+        ).path
+    }
+
+    private static func canonicalizedMap(
+        _ map: [String: String]
+    ) -> [String: String] {
+        var result: [String: String] = [:]
+        // Uma entrada já canônica vence um alias legado em caso de colisão.
+        for (path, value) in map where path == canonicalPath(path) {
+            result[path] = value
+        }
+        for (path, value) in map {
+            let canonical = canonicalPath(path)
+            if result[canonical] == nil { result[canonical] = value }
+        }
+        return result
+    }
+
+    private static func canonicalizedRecoveryStates(
+        _ map: [String: RenewalRecoveryState]
+    ) -> [String: RenewalRecoveryState] {
+        var result: [String: RenewalRecoveryState] = [:]
+        // A chave já canônica vence um alias legado em caso de colisão.
+        for (key, state) in map where key == canonicalRecoveryKey(key) {
+            result[key] = state
+        }
+        for (key, state) in map {
+            let canonical = canonicalRecoveryKey(key)
+            if result[canonical] == nil { result[canonical] = state }
+        }
+        return result
+    }
+
+    private static func decodedRecoveryStates(
+        from data: Data
+    ) -> (
+        states: [String: RenewalRecoveryState],
+        topLevelCorrupt: Bool
+    ) {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let entries = object as? [String: Any] else {
+            return ([:], true)
+        }
+        var states: [String: RenewalRecoveryState] = [:]
+        let decoder = JSONDecoder()
+        for (key, value) in entries {
+            let entryData = try? JSONSerialization.data(
+                withJSONObject: value,
+                options: [.fragmentsAllowed]
+            )
+            if let entryData,
+               let state = try? decoder.decode(
+                   RenewalRecoveryState.self,
+                   from: entryData
+               ) {
+                states[key] = state
+            } else {
+                // Uma case de build futura ou um item corrompido não pode
+                // liberar execução. Preserva as demais entradas e bloqueia
+                // somente esta conta até uma edição explícita da tarefa.
+                states[key] = .needsAttention(bootstrapOrigin: false)
+            }
+        }
+        return (canonicalizedRecoveryStates(states), false)
+    }
+
+    private static func canonicalRecoveryKey(_ key: String) -> String {
+        let parts = key.split(separator: "|", maxSplits: 1)
+        guard parts.count == 2 else { return key }
+        return "\(parts[0])|\(canonicalPath(String(parts[1])))"
+    }
+
+    private static func migratedBootstrapAttempts(
+        _ map: [String: Date]
+    ) -> [String: RenewalRecoveryState] {
+        var result: [String: RenewalRecoveryState] = [:]
+        for (key, attemptDate) in map {
+            let parts = key.split(separator: "|", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            let canonical = "\(parts[0])|\(canonicalPath(String(parts[1])))"
+            let state = RenewalRecoveryState.cooldown(
+                notBefore: attemptDate.addingTimeInterval(bootstrapCooldown),
+                bootstrapOrigin: true
+            )
+            if case .cooldown(let existing, _) = result[canonical],
+               existing >= attemptDate.addingTimeInterval(bootstrapCooldown) {
+                continue
+            }
+            result[canonical] = state
+        }
+        return result
+    }
+
     init(defaults: UserDefaults = .standard,
          home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.defaults = defaults
+        self.homeDirectory = home.standardizedFileURL
         self.previousAliveAt = defaults.object(forKey: Keys.lastAliveAt) as? Date
-        self.pausedAccounts = Set((defaults.array(forKey: Keys.pausedAccounts) as? [String]) ?? [])
+        let loadedRecoveryStates: [String: RenewalRecoveryState]
+        let recoveryBlobWasCorrupt: Bool
+        if let data = defaults.data(forKey: Keys.renewalRecoveryStates) {
+            let decoded = Self.decodedRecoveryStates(from: data)
+            loadedRecoveryStates = decoded.states
+            recoveryBlobWasCorrupt = decoded.topLevelCorrupt
+        } else {
+            loadedRecoveryStates = Self.migratedBootstrapAttempts(
+                defaults.dictionary(forKey: Keys.bootstrapAttempts)
+                    as? [String: Date] ?? [:]
+            )
+            recoveryBlobWasCorrupt = false
+        }
+        self.renewalRecoveryStates = loadedRecoveryStates
+        let normalizedPausedAccounts = Set(
+            ((defaults.array(forKey: Keys.pausedAccounts) as? [String]) ?? [])
+                .map(Self.canonicalPath)
+        )
+        self.pausedAccounts = normalizedPausedAccounts
+        defaults.set(Array(normalizedPausedAccounts), forKey: Keys.pausedAccounts)
         if let data = defaults.data(forKey: Keys.history),
            let decoded = try? JSONDecoder().decode([FailableDecodable<FireEvent>].self, from: data) {
             // Decode lossy (como `tasks`): um evento corrompido some, o resto do
@@ -480,6 +896,9 @@ final class AppState: ObservableObject {
             self.history = []
         }
         self.showRemainingInBar = defaults.bool(forKey: Keys.showRemainingInBar)
+        self.showSensitiveNotificationDetails = defaults.bool(
+            forKey: Keys.showSensitiveNotificationDetails
+        )
         let storedUpcoming = defaults.integer(forKey: Keys.panelUpcomingCount)
         self.panelUpcomingCount = storedUpcoming == 0 ? 1 : min(max(storedUpcoming, 1), 5)
         if let rawLanguage = defaults.string(forKey: Keys.language),
@@ -489,7 +908,11 @@ final class AppState: ObservableObject {
             self.language = .english
         }
         self.hasDismissedPermissionGuide = defaults.bool(forKey: Keys.hasDismissedPermissionGuide)
-        self.aliases = (defaults.dictionary(forKey: Keys.aliases) as? [String: String]) ?? [:]
+        let normalizedAliases = Self.canonicalizedMap(
+            (defaults.dictionary(forKey: Keys.aliases) as? [String: String]) ?? [:]
+        )
+        self.aliases = normalizedAliases
+        defaults.set(normalizedAliases, forKey: Keys.aliases)
         var loadedTasks: [ScheduledTask] = []
         if let data = defaults.data(forKey: Keys.tasks),
            let decoded = try? JSONDecoder().decode([FailableDecodable<ScheduledTask>].self, from: data) {
@@ -501,10 +924,59 @@ final class AppState: ObservableObject {
         }
         self.tasks = loadedTasks
         if let stored = defaults.array(forKey: Keys.registeredAccounts) as? [String] {
-            self.registeredAccounts = stored
+            let normalizedRegisteredAccounts = Array(
+                Set(stored.map(Self.canonicalPath))
+            ).sorted()
+            self.registeredAccounts = normalizedRegisteredAccounts
+            defaults.set(
+                normalizedRegisteredAccounts,
+                forKey: Keys.registeredAccounts
+            )
         } else {
-            self.registeredAccounts = []
+            self.registeredAccounts = Self.initialClaudeAccountScan(home: home)
             defaults.set(self.registeredAccounts, forKey: Keys.registeredAccounts)
+        }
+        let normalizedProviders = Self.canonicalizedMap(
+            (defaults.dictionary(forKey: Keys.registeredAccountProviders)
+                as? [String: String]) ?? [:]
+        )
+        self.registeredAccountProviders = normalizedProviders
+        defaults.set(
+            normalizedProviders,
+            forKey: Keys.registeredAccountProviders
+        )
+        // Migração de cadastros antigos enquanto a assinatura ainda existe.
+        for path in self.registeredAccounts
+        where self.registeredAccountProviders[path] == nil {
+            let url = URL(fileURLWithPath: path)
+            if let detected = Provider.detect(at: url) {
+                self.registeredAccountProviders[path] = detected.rawValue
+            }
+        }
+        var liveTasks: [String: ScheduledTask] = [:]
+        for task in self.tasks {
+            if let key = self.continuousKey(for: task),
+               liveTasks[key] == nil {
+                liveTasks[key] = task
+            }
+        }
+        if recoveryBlobWasCorrupt {
+            // Sem chaves recuperáveis, o único comportamento seguro é
+            // bloquear todos os contínuos existentes. Editar o payload remove
+            // o needs-attention pela regra de revisão em `tasks.didSet`.
+            for key in liveTasks.keys {
+                self.renewalRecoveryStates[key] =
+                    .needsAttention(bootstrapOrigin: false)
+            }
+        }
+        self.renewalRecoveryStates = self.renewalRecoveryStates.filter {
+            key, state in
+            // Um downgrade pode não decodificar uma task de build futura.
+            // Preserva seu sidecar; a próxima mutação explícita de `tasks`
+            // fará a limpeza normal em `didSet`.
+            guard let task = liveTasks[key] else { return true }
+            return !state.bootstrapOrigin
+                || task.resolvedBootstrapWhenInactive
         }
     }
 }

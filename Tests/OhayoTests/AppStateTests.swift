@@ -156,11 +156,61 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(s.history.isEmpty)
     }
 
-    /// Sem conta selecionada: descoberta sempre inclui a conta padrão embutida.
-    func testDiscoverAccountsSempreIncluiDefault() {
-        let state = AppState(defaults: freshDefaults())
-        let accounts = state.discoverAccounts().map { $0.standardizedFileURL }
-        XCTAssertTrue(accounts.contains(AppState.defaultConfigDir.standardizedFileURL))
+    func testPrimeiroLaunchDescobreContasExistentesSemInventarClaudeDefault() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohayo-discovery-\(UUID().uuidString)")
+        let custom = home.appendingPathComponent(".claude-trabalho")
+        let codex = home.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(
+            at: custom.appendingPathComponent("projects"), withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
+        try "{}".write(to: codex.appendingPathComponent("auth.json"),
+                       atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let defaults = UserDefaults(suiteName: "ohayo-test-\(UUID().uuidString)")!
+
+        let state = AppState(defaults: defaults, home: home)
+        let accounts = Set(state.discoverAccounts().map(\.standardizedFileURL))
+
+        XCTAssertTrue(accounts.contains(custom.standardizedFileURL))
+        XCTAssertTrue(accounts.contains(codex.standardizedFileURL))
+        XCTAssertFalse(accounts.contains(
+            home.appendingPathComponent(".claude").standardizedFileURL
+        ))
+        XCTAssertEqual(state.registeredAccounts, [custom.standardizedFileURL.path])
+    }
+
+    func testContaCustomPersistidaContinuaVisivelQuandoPastaSome() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohayo-home-vazio-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let missing = home.appendingPathComponent(".claude-removida").standardizedFileURL
+        let defaults = freshDefaults()
+        defaults.set([missing.path], forKey: "registeredAccounts")
+
+        let state = AppState(defaults: defaults, home: home)
+
+        XCTAssertTrue(state.discoverAccounts().contains(missing))
+    }
+
+    func testMissingCLIsNaoAlertaClaudeParaUsuarioSomenteCodexEShell() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohayo-codex-only-\(UUID().uuidString)")
+        let codex = home.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
+        try "{}".write(to: codex.appendingPathComponent("auth.json"),
+                       atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let state = AppState(defaults: freshDefaults(), home: home)
+        state.tasks = [
+            ScheduledTask(uid: UUID(), command: Message(text: "1+1", kind: .codex)),
+            ScheduledTask(uid: UUID(), command: Message(text: "echo oi", kind: .shell)),
+        ]
+        state.cliFound = [.claude: false, .codex: false]
+
+        XCTAssertEqual(state.missingCLIs, [.codex])
     }
 
     func testMessageConfigRoundtripCodable() throws {
@@ -200,6 +250,38 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(
             state.effectiveConfigDir(for: Message(text: "x", kind: .claude)),
             AppState.defaultConfigDir)
+    }
+
+    func testHomeInjetadoControlaTodosOsDefaultsDeConta() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("home-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let state = AppState(defaults: freshDefaults(), home: home)
+        let claude = home.appendingPathComponent(".claude").standardizedFileURL
+        let codex = home.appendingPathComponent(".codex").standardizedFileURL
+
+        XCTAssertEqual(
+            state.effectiveConfigDir(for: Message(text: "x", kind: .claude)),
+            claude
+        )
+        XCTAssertEqual(
+            state.effectiveConfigDir(for: Message(text: "x", kind: .codex)),
+            codex
+        )
+        XCTAssertEqual(
+            state.accountDir(for: ScheduledTask(
+                uid: UUID(), command: Message(text: "x", kind: .claude)
+            )),
+            claude
+        )
+        XCTAssertEqual(
+            state.makeEvent(
+                date: Date(), result: .success,
+                message: Message(text: "x", kind: .codex), origin: .manual
+            ).accountPath,
+            codex.path
+        )
     }
 
     func testDefaultMessageTemUIDFixo() {
@@ -278,6 +360,18 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.language, .english)
     }
 
+    func testDetalhesSensiveisDeNotificacaoSaoOptInEPersistem() {
+        let defaults = freshDefaults()
+        let state = AppState(defaults: defaults)
+        XCTAssertFalse(state.showSensitiveNotificationDetails)
+
+        state.showSensitiveNotificationDetails = true
+
+        XCTAssertTrue(
+            AppState(defaults: defaults).showSensitiveNotificationDetails
+        )
+    }
+
     func testHistoricoCapEm20MaisRecentePrimeiro() {
         let state = AppState(defaults: freshDefaults())
         for i in 0..<25 {
@@ -295,6 +389,17 @@ final class AppStateTests: XCTestCase {
                                 messageText: "1+1", account: ".claude", origin: .scheduled))
         let b = AppState(defaults: defaults)
         XCTAssertEqual(b.history, a.history)
+    }
+
+    func testLimparHistoricoRemoveEventosPersistidos() {
+        let defaults = freshDefaults()
+        let state = AppState(defaults: defaults)
+        state.recordEvent(FireEvent(date: Date(), result: .success))
+
+        state.clearHistory()
+
+        XCTAssertTrue(state.history.isEmpty)
+        XCTAssertTrue(AppState(defaults: defaults).history.isEmpty)
     }
 
     func testApelidoPersisteEDefineRotulo() {
@@ -345,6 +450,19 @@ final class AppStateTests: XCTestCase {
         // Duplicata → no-op.
         XCTAssertEqual(state.registerAccount(dir), .codex)
         XCTAssertEqual(state.registeredAccounts.filter { $0 == dir.standardizedFileURL.path }.count, 1)
+    }
+
+    func testProviderDaContaCustomPersisteQuandoPastaSome() throws {
+        let defaults = freshDefaults()
+        let state = AppState(defaults: defaults)
+        let dir = try makeAccountDir(signature: "auth.json")
+        XCTAssertEqual(state.registerAccount(dir), .codex)
+
+        try FileManager.default.removeItem(at: dir)
+        let reloaded = AppState(defaults: defaults)
+
+        XCTAssertTrue(reloaded.discoverAccounts().contains(dir.standardizedFileURL))
+        XCTAssertEqual(reloaded.provider(for: dir), .codex)
     }
 
     func testRegisterAccountPastaSemAssinaturaNaoCadastra() throws {
@@ -489,6 +607,11 @@ final class AppStateTests: XCTestCase {
         candidato.uid = UUID()
         candidato.repetition = .fixed
         XCTAssertFalse(state.hasContinuousConflict(candidato))
+        // O contrato é "no máximo um contínuo habilitado"; deve ser possível
+        // salvar um duplicado desligado para depois corrigir/remover.
+        candidato.repetition = .continuous
+        candidato.enabled = false
+        XCTAssertFalse(state.hasContinuousConflict(candidato))
     }
 
     func testSetTaskEnabledRecusaSegundoContinuoNaMesmaConta() throws {
@@ -565,6 +688,24 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.email(for: conta), "antes@example.com")
         try writeEmail("depois@example.com", modificationDate: Date(timeIntervalSince1970: 200))
         XCTAssertEqual(state.email(for: conta), "depois@example.com")
+    }
+
+    func testContaClaudeNativaLeIdentidadeDoClaudeJsonNoHome() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohayo-home-\(UUID().uuidString)")
+        let nativeDir = home.appendingPathComponent(".claude")
+        try FileManager.default.createDirectory(at: nativeDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let native = ["oauthAccount": ["emailAddress": "nativa@example.com"]]
+        try JSONSerialization.data(withJSONObject: native)
+            .write(to: home.appendingPathComponent(".claude.json"))
+        let nested = ["oauthAccount": ["emailAddress": "arquivo-errado@example.com"]]
+        try JSONSerialization.data(withJSONObject: nested)
+            .write(to: nativeDir.appendingPathComponent(".claude.json"))
+        let state = AppState(defaults: freshDefaults(), home: home)
+
+        XCTAssertEqual(state.email(for: nativeDir), "nativa@example.com")
     }
 
     func testEventoClaudeCapturaContaProviderModeloEIdentidade() throws {
@@ -716,6 +857,568 @@ final class AppStateTests: XCTestCase {
         let state = AppState(defaults: d)
 
         XCTAssertEqual(state.tasks.map(\.uid), [bom])
+    }
+
+    func testBootstrapContinuoAusenteFicaDesligadoEFalsePersiste() throws {
+        let legado = try JSONDecoder().decode(
+            ScheduledTask.self,
+            from: Data("""
+            {"uid":"\(UUID().uuidString)","repetition":"continuous"}
+            """.utf8)
+        )
+        XCTAssertNil(legado.bootstrapWhenInactive)
+        XCTAssertFalse(legado.resolvedBootstrapWhenInactive)
+
+        var optOut = legado
+        optOut.bootstrapWhenInactive = false
+        let recarregado = try JSONDecoder().decode(
+            ScheduledTask.self,
+            from: JSONEncoder().encode(optOut)
+        )
+        XCTAssertEqual(recarregado.bootstrapWhenInactive, false)
+        XCTAssertFalse(recarregado.resolvedBootstrapWhenInactive)
+    }
+
+    func testCooldownDeBootstrapPersisteEntreInstancias() {
+        let defaults = freshDefaults()
+        let state = AppState(defaults: defaults)
+        var task = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        task.bootstrapWhenInactive = true
+        let now = Date(timeIntervalSince1970: 1_783_000_000)
+        state.tasks = [task]
+
+        XCTAssertTrue(state.shouldBootstrap(task, now: now))
+        state.recordBootstrapAttempt(task, at: now)
+        XCTAssertFalse(state.shouldBootstrap(task, now: now))
+
+        let reloaded = AppState(defaults: defaults)
+        XCTAssertFalse(reloaded.shouldBootstrap(task, now: now))
+        XCTAssertTrue(
+            reloaded.shouldBootstrap(
+                task,
+                now: now.addingTimeInterval(AppState.bootstrapCooldown)
+            )
+        )
+    }
+
+    func testRecoveryTipadoPersisteRetryENeedsAttention() {
+        let defaults = freshDefaults()
+        let state = AppState(defaults: defaults)
+        var bootstrap = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        bootstrap.bootstrapWhenInactive = true
+        let scheduled = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        state.tasks = [bootstrap, scheduled]
+        let retryAt = Date().addingTimeInterval(90)
+        state.setRenewalRecoveryState(
+            .retry(
+                notBefore: retryAt,
+                attempt: 3,
+                bootstrapOrigin: true
+            ),
+            for: bootstrap
+        )
+        state.setRenewalRecoveryState(
+            .needsAttention(bootstrapOrigin: false),
+            for: scheduled
+        )
+
+        let reloaded = AppState(defaults: defaults)
+        let byUID = Dictionary(
+            uniqueKeysWithValues: reloaded.tasks.map { ($0.uid, $0) }
+        )
+        XCTAssertEqual(
+            reloaded.renewalRecoveryState(
+                for: try! XCTUnwrap(byUID[bootstrap.uid])
+            ),
+            .retry(
+                notBefore: retryAt,
+                attempt: 3,
+                bootstrapOrigin: true
+            )
+        )
+        XCTAssertEqual(
+            reloaded.renewalRecoveryState(
+                for: try! XCTUnwrap(byUID[scheduled.uid])
+            ),
+            .needsAttention(bootstrapOrigin: false)
+        )
+    }
+
+    func testRecoveryCorrompidoPreservaEntradaValidaEBloqueiaInvalida() throws {
+        let defaults = freshDefaults()
+        var validTask = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        validTask.bootstrapWhenInactive = true
+        let invalidTask = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        defaults.set(
+            try JSONEncoder().encode([validTask, invalidTask]),
+            forKey: "tasks"
+        )
+        let accountPath = ProviderAccountContext.canonicalAccountDirectory(
+            AppState.defaultConfigDir
+        ).path
+        let validKey = "\(validTask.uid.uuidString)|\(accountPath)"
+        let invalidKey = "\(invalidTask.uid.uuidString)|\(accountPath)"
+        let retry = RenewalRecoveryState.retry(
+            notBefore: Date().addingTimeInterval(90),
+            attempt: 2,
+            bootstrapOrigin: true
+        )
+        let validObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(retry)
+        )
+        let blob: [String: Any] = [
+            validKey: validObject,
+            invalidKey: [
+                "futureCase": ["bootstrapOrigin": false]
+            ],
+        ]
+        defaults.set(
+            try JSONSerialization.data(withJSONObject: blob),
+            forKey: "renewalRecoveryStates"
+        )
+
+        let state = AppState(defaults: defaults)
+
+        XCTAssertEqual(
+            state.renewalRecoveryState(for: validTask),
+            retry
+        )
+        XCTAssertEqual(
+            state.renewalRecoveryState(for: invalidTask),
+            .needsAttention(bootstrapOrigin: false)
+        )
+    }
+
+    func testRecoveryComBlobTotalmenteCorrompidoFalhaFechado() throws {
+        let defaults = freshDefaults()
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        defaults.set(try JSONEncoder().encode([task]), forKey: "tasks")
+        defaults.set(
+            Data("{not-json".utf8),
+            forKey: "renewalRecoveryStates"
+        )
+
+        let state = AppState(defaults: defaults)
+
+        XCTAssertEqual(
+            state.renewalRecoveryState(for: task),
+            .needsAttention(bootstrapOrigin: false)
+        )
+    }
+
+    func testDowngradePreservaRecoveryDeTaskQueAindaNaoDecodifica() throws {
+        let defaults = freshDefaults()
+        let known = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        let future = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultCodexMessage,
+            repetition: .continuous
+        )
+        let encodedTasks = try JSONEncoder().encode([known, future])
+        var taskObjects = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encodedTasks)
+                as? [[String: Any]]
+        )
+        taskObjects[1]["repetition"] = "future-continuous"
+        defaults.set(
+            try JSONSerialization.data(withJSONObject: taskObjects),
+            forKey: "tasks"
+        )
+        let recovery = RenewalRecoveryState.cooldown(
+            notBefore: Date().addingTimeInterval(300),
+            bootstrapOrigin: false
+        )
+        let futurePath = ProviderAccountContext.canonicalAccountDirectory(
+            AppState.defaultCodexConfigDir
+        ).path
+        let key = "\(future.uid.uuidString)|\(futurePath)"
+        defaults.set(
+            try JSONEncoder().encode([key: recovery]),
+            forKey: "renewalRecoveryStates"
+        )
+
+        let state = AppState(defaults: defaults)
+
+        XCTAssertEqual(state.tasks.map(\.uid), [known.uid])
+        XCTAssertEqual(
+            state.renewalRecoveryState(for: future),
+            recovery
+        )
+    }
+
+    func testToggleDeBootstrapPreservaRecoveryDeOrigemAgendada() {
+        let state = AppState(defaults: freshDefaults())
+        var task = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        task.bootstrapWhenInactive = true
+        state.tasks = [task]
+        let recovery = RenewalRecoveryState.cooldown(
+            notBefore: Date().addingTimeInterval(300),
+            bootstrapOrigin: false
+        )
+        state.setRenewalRecoveryState(recovery, for: task)
+
+        task.bootstrapWhenInactive = false
+        state.tasks = [task]
+        XCTAssertEqual(
+            state.renewalRecoveryState(for: task),
+            recovery
+        )
+
+        task.bootstrapWhenInactive = true
+        state.tasks = [task]
+        XCTAssertEqual(
+            state.renewalRecoveryState(for: task),
+            recovery
+        )
+    }
+
+    func testRecoverySobreviveEnquantoContaExplicitaEstaOffline() {
+        let defaults = freshDefaults()
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("offline-\(UUID().uuidString)")
+        var task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "status",
+                kind: .claude,
+                configDir: missing.path
+            ),
+            repetition: .continuous
+        )
+        let state = AppState(defaults: defaults)
+        state.tasks = [task]
+        let recovery = RenewalRecoveryState.needsAttention(
+            bootstrapOrigin: false
+        )
+        state.setRenewalRecoveryState(recovery, for: task)
+
+        task.name = "renomeada"
+        state.tasks = [task]
+        let reloaded = AppState(defaults: defaults)
+
+        XCTAssertEqual(
+            reloaded.renewalRecoveryState(for: task),
+            recovery
+        )
+    }
+
+    func testUIDContinuoDuplicadoNaoCausaTrapNaLimpezaDeRecovery() {
+        let state = AppState(defaults: freshDefaults())
+        let uid = UUID()
+        let first = ScheduledTask(
+            uid: uid,
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        var duplicate = first
+        duplicate.name = "duplicado"
+
+        state.tasks = [first, duplicate]
+        state.tasks.append(
+            ScheduledTask(
+                uid: UUID(),
+                command: AppState.defaultMessage,
+                repetition: .fixed
+            )
+        )
+
+        XCTAssertEqual(state.tasks.count, 3)
+    }
+
+    func testCooldownNaoVazaQuandoTaskMudaDeConta() {
+        let state = AppState(defaults: freshDefaults())
+        var task = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        task.bootstrapWhenInactive = true
+        let now = Date(timeIntervalSince1970: 1_783_000_000)
+        state.recordBootstrapAttempt(task, at: now)
+
+        task.command = AppState.defaultCodexMessage
+
+        XCTAssertTrue(state.shouldBootstrap(task, now: now))
+    }
+
+    func testRevogarEReativarOptInLimpaCooldownAnterior() {
+        let state = AppState(defaults: freshDefaults())
+        var task = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        task.bootstrapWhenInactive = true
+        let now = Date(timeIntervalSince1970: 1_783_000_000)
+        state.tasks = [task]
+        state.recordBootstrapAttempt(task, at: now)
+        XCTAssertFalse(state.shouldBootstrap(task, now: now))
+
+        task.bootstrapWhenInactive = false
+        state.tasks = [task]
+        task.bootstrapWhenInactive = true
+        state.tasks = [task]
+
+        XCTAssertTrue(state.shouldBootstrap(task, now: now))
+    }
+
+    func testContaRealESymlinkCompartilhamIdentidadeDeConflito() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-account-alias-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real")
+        let alias = root.appendingPathComponent("alias")
+        try fm.createDirectory(
+            at: real.appendingPathComponent("projects"),
+            withIntermediateDirectories: true
+        )
+        try fm.createSymbolicLink(at: alias, withDestinationURL: real)
+        defer { try? fm.removeItem(at: root) }
+
+        let state = AppState(defaults: freshDefaults())
+        let existing = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "A",
+                kind: .claude,
+                configDir: real.path
+            ),
+            repetition: .continuous
+        )
+        let candidate = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "B",
+                kind: .claude,
+                configDir: alias.path
+            ),
+            repetition: .continuous
+        )
+        state.tasks = [existing]
+
+        XCTAssertEqual(
+            state.accountDir(for: existing),
+            state.accountDir(for: candidate)
+        )
+        XCTAssertTrue(state.hasContinuousConflict(candidate))
+    }
+
+    func testContaOfflineAindaParticipaDeConflitoFiltroEContagem() {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("offline-conflict-\(UUID().uuidString)")
+        let state = AppState(defaults: freshDefaults())
+        let existing = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "A",
+                kind: .claude,
+                configDir: missing.path
+            ),
+            repetition: .continuous
+        )
+        let candidate = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "B",
+                kind: .claude,
+                configDir: missing.path
+            ),
+            repetition: .continuous
+        )
+        state.tasks = [existing]
+        state.accountFilter = missing
+
+        XCTAssertNil(state.accountDir(for: existing))
+        XCTAssertEqual(state.intendedAccountDir(for: existing), missing)
+        XCTAssertTrue(state.hasContinuousConflict(candidate))
+        XCTAssertTrue(state.taskMatchesFilter(existing))
+        XCTAssertEqual(state.activeScheduleCount(for: missing), 1)
+    }
+
+    func testCadastroPorSymlinkNaoDuplicaContaReal() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-account-register-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real")
+        let alias = root.appendingPathComponent("alias")
+        try fm.createDirectory(
+            at: real.appendingPathComponent("projects"),
+            withIntermediateDirectories: true
+        )
+        try fm.createSymbolicLink(at: alias, withDestinationURL: real)
+        defer { try? fm.removeItem(at: root) }
+        let state = AppState(defaults: freshDefaults())
+
+        XCTAssertEqual(state.registerAccount(real), .claude)
+        XCTAssertEqual(state.registerAccount(alias), .claude)
+
+        XCTAssertEqual(state.registeredAccounts, [real.path])
+    }
+
+    func testDefaultSymlinkEhCanonicoENaoViraCadastroDuplicado() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-default-alias-\(UUID().uuidString)")
+        let home = root.appendingPathComponent("home")
+        let real = root.appendingPathComponent("claude-real")
+        let alias = home.appendingPathComponent(".claude")
+        try fm.createDirectory(at: home, withIntermediateDirectories: true)
+        try fm.createDirectory(
+            at: real.appendingPathComponent("projects"),
+            withIntermediateDirectories: true
+        )
+        try fm.createSymbolicLink(at: alias, withDestinationURL: real)
+        defer { try? fm.removeItem(at: root) }
+        let state = AppState(defaults: freshDefaults(), home: home)
+        let canonicalReal =
+            ProviderAccountContext.canonicalAccountDirectory(real)
+
+        XCTAssertEqual(state.discoverAccounts(), [canonicalReal])
+        XCTAssertEqual(state.registerAccount(alias), .claude)
+        XCTAssertEqual(state.registeredAccounts, [])
+        XCTAssertEqual(state.discoverAccounts(), [canonicalReal])
+    }
+
+    func testProviderPersistidoVenceAssinaturaAmbiguaTemporaria() throws {
+        let account = try makeAccountDir(
+            signature: ".claude.json",
+            subdir: "sessions"
+        )
+        defer { try? FileManager.default.removeItem(at: account) }
+        let defaults = freshDefaults()
+        defaults.set([account.path], forKey: "registeredAccounts")
+        defaults.set(
+            [account.path: Provider.codex.rawValue],
+            forKey: "registeredAccountProviders"
+        )
+
+        let state = AppState(defaults: defaults)
+
+        XCTAssertEqual(Provider.detect(at: account), .claude)
+        XCTAssertEqual(state.provider(for: account), .codex)
+    }
+
+    func testInitMigraChavesPersistidasDeSymlinkParaContaCanonica() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-account-migrate-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real")
+        let alias = root.appendingPathComponent("alias")
+        try fm.createDirectory(
+            at: real.appendingPathComponent("projects"),
+            withIntermediateDirectories: true
+        )
+        try fm.createSymbolicLink(at: alias, withDestinationURL: real)
+        defer { try? fm.removeItem(at: root) }
+        let defaults = freshDefaults()
+        defaults.set([alias.path], forKey: "registeredAccounts")
+        defaults.set(
+            [alias.path: Provider.claude.rawValue],
+            forKey: "registeredAccountProviders"
+        )
+        defaults.set([alias.path: "Conta"], forKey: "aliases")
+        defaults.set([alias.path], forKey: "pausedAccounts")
+
+        let state = AppState(defaults: defaults)
+
+        XCTAssertEqual(state.registeredAccounts, [real.path])
+        XCTAssertEqual(state.provider(for: real), .claude)
+        XCTAssertEqual(state.alias(for: real), "Conta")
+        XCTAssertTrue(state.isPaused(real))
+        XCTAssertEqual(
+            defaults.stringArray(forKey: "registeredAccounts"),
+            [real.path]
+        )
+    }
+
+    func testInitMigraCooldownERestauraTaskDeSymlinkSemTrocarConta() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-task-alias-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real")
+        let alias = root.appendingPathComponent("alias")
+        try fm.createDirectory(
+            at: real.appendingPathComponent("projects"),
+            withIntermediateDirectories: true
+        )
+        try fm.createSymbolicLink(at: alias, withDestinationURL: real)
+        defer { try? fm.removeItem(at: root) }
+
+        let defaults = freshDefaults()
+        defaults.set([real.path], forKey: "registeredAccounts")
+        defaults.set(
+            [real.path: Provider.claude.rawValue],
+            forKey: "registeredAccountProviders"
+        )
+        var task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "revisa",
+                kind: .claude,
+                configDir: alias.path
+            ),
+            repetition: .continuous
+        )
+        task.bootstrapWhenInactive = true
+        let originalTasksData = try JSONEncoder().encode([task])
+        defaults.set(originalTasksData, forKey: "tasks")
+        let attemptedAt = Date()
+        defaults.set(
+            ["\(task.uid.uuidString)|\(alias.path)": attemptedAt],
+            forKey: "bootstrapAttempts"
+        )
+
+        let state = AppState(defaults: defaults)
+        let migrated = try XCTUnwrap(state.tasks.first)
+        // O blob original não é re-encodado no launch (preserva campos de uma
+        // versão futura em caso de downgrade). A normalização ocorre na borda
+        // de identidade e no formulário.
+        XCTAssertEqual(migrated.resolvedCommand.configDir, alias.path)
+        XCTAssertFalse(state.shouldBootstrap(migrated, now: attemptedAt))
+
+        let restored = AgendamentoFormSheet.restoredState(for: migrated)
+        XCTAssertEqual(restored.account, real.path)
+        XCTAssertEqual(
+            AgendamentoFormSheet.effectiveAccountPath(
+                selection: restored.account,
+                accounts: [real]
+            ),
+            real.path
+        )
+
+        XCTAssertEqual(defaults.data(forKey: "tasks"), originalTasksData)
     }
 
     func testPermissionGuideStartsUndismissed() {

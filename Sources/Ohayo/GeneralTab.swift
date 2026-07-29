@@ -15,6 +15,10 @@ struct GeneralTab: View {
                         set: { loginItem.setEnabled($0) }))
                 }
                 Toggle(strings.remainingInMenuBar, isOn: $state.showRemainingInBar)
+                Toggle(
+                    strings.showSensitiveNotificationDetails,
+                    isOn: $state.showSensitiveNotificationDetails
+                )
                 Stepper(value: $state.panelUpcomingCount, in: 1...5) {
                     HStack {
                         Text(strings.panelUpcomingCountLabel)

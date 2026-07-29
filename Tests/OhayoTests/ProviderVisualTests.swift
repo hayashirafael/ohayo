@@ -16,8 +16,24 @@ final class ProviderVisualTests: XCTestCase {
         XCTAssertEqual(AgendamentoFormSheet.initialCommandText, "")
     }
 
-    func testNovoAgendamentoComecaSemModoDeSaida() {
-        XCTAssertEqual(AgendamentoFormSheet.initialOutputMode, .none)
+    func testNovoAgendamentoClaudeOuCodexComecaNoTerminal() {
+        XCTAssertEqual(AgendamentoFormSheet.initialOutputMode, .terminal)
+        let restored = AgendamentoFormSheet.restoredState(for: nil)
+        XCTAssertEqual(restored.outputMode, .terminal)
+        XCTAssertFalse(restored.bootstrapWhenInactive)
+    }
+
+    func testAgendamentoLegadoContinuoExigeOptInAoEditar() {
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+
+        XCTAssertFalse(task.resolvedBootstrapWhenInactive)
+        XCTAssertFalse(
+            AgendamentoFormSheet.restoredState(for: task).bootstrapWhenInactive
+        )
     }
 
     func testModoDeSaidaNormalizaMensagensPersistidas() {
@@ -46,6 +62,46 @@ final class ProviderVisualTests: XCTestCase {
         XCTAssertEqual(restored.kind, .claude)
         XCTAssertNil(restored.skill)
         XCTAssertNil(restored.account)
+        XCTAssertNil(restored.codexReasoning)
+    }
+
+    func testRestoredStateDistingueReasoningPadraoDeLowExplicito() {
+        let accountDefault = ScheduledTask(
+            uid: UUID(),
+            command: Message(text: "x", kind: .codex))
+        let explicitLow = ScheduledTask(
+            uid: UUID(),
+            command: Message(text: "x", kind: .codex, codexReasoning: .low))
+
+        XCTAssertNil(AgendamentoFormSheet.restoredState(for: accountDefault).codexReasoning)
+        XCTAssertEqual(
+            AgendamentoFormSheet.restoredState(for: explicitLow).codexReasoning,
+            .low
+        )
+    }
+
+    func testLabelsDiferenciamCustomizacoesDeSandboxEExpansaoDeContexto() {
+        let english = L10n(language: .english)
+        XCTAssertEqual(
+            english.safeMode,
+            "Ignore Claude customizations (not a sandbox)"
+        )
+        XCTAssertEqual(english.skillLabel, "Skill (expands context)")
+        XCTAssertEqual(
+            english.skillDisablesSafeMode,
+            "Selecting a skill expands context and requires Claude customizations"
+        )
+
+        let portuguese = L10n(language: .portuguese)
+        XCTAssertEqual(
+            portuguese.safeMode,
+            "Ignorar customizações do Claude (não é sandbox)"
+        )
+        XCTAssertEqual(portuguese.skillLabel, "Skill (amplia o contexto)")
+        XCTAssertEqual(
+            portuguese.skillDisablesSafeMode,
+            "Selecionar uma skill amplia o contexto e exige as customizações do Claude"
+        )
     }
 
     /// Regressão do bug crítico de perda de dado: editar uma task Codex com

@@ -60,7 +60,7 @@ struct ClaudeConfigForm: View {
 
 struct CodexConfigForm: View {
     @Binding var model: String
-    @Binding var reasoning: Message.CodexReasoning
+    @Binding var reasoning: Message.CodexReasoning?
     @Binding var configDir: String?
     @Binding var skill: String?
     let availableSkills: [SkillRef]
@@ -78,7 +78,10 @@ struct CodexConfigForm: View {
             GridRow {
                 ConfigRowLabel(strings.reasoning)
                 Picker("", selection: $reasoning) {
-                    ForEach(Message.CodexReasoning.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    Text(strings.accountDefaultReasoning).tag(Message.CodexReasoning?.none)
+                    ForEach(Message.CodexReasoning.allCases, id: \.self) {
+                        Text($0.rawValue).tag(Message.CodexReasoning?.some($0))
+                    }
                 }
                 .labelsHidden()
             }
@@ -111,6 +114,44 @@ struct ConfigRowLabel: View {
         Text(title)
             .foregroundStyle(.secondary)
             .gridColumnAlignment(.trailing)
+    }
+}
+
+/// Timeout do processo que o Ohayo acompanha. O valor opcional mantém o
+/// payload enxuto: nil representa o default seguro de cada tipo de comando.
+struct TimeoutPicker: View {
+    @Binding var timeoutSeconds: Int?
+    let kind: Message.Kind
+    let strings: L10n
+
+    private var selection: Binding<Int> {
+        Binding(
+            get: {
+                timeoutSeconds ?? Message.defaultTimeoutSeconds(for: kind)
+            },
+            set: {
+                timeoutSeconds = Message.normalizedTimeoutSeconds($0, for: kind)
+            }
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(strings.timeout)
+                .foregroundStyle(.secondary)
+            Picker("", selection: selection) {
+                ForEach(Message.timeoutPresets, id: \.self) { seconds in
+                    Text(Self.label(for: seconds)).tag(seconds)
+                }
+            }
+            .labelsHidden()
+            .accessibilityLabel(strings.timeout)
+        }
+    }
+
+    static func label(for seconds: Int) -> String {
+        let minutes = seconds / 60
+        return minutes == 1 ? "1 min" : "\(minutes) min"
     }
 }
 

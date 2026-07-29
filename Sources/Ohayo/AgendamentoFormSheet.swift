@@ -11,12 +11,39 @@ struct AgendamentoFormSheet: View {
         case response
     }
 
-    static let initialOutputMode: OutputMode = .none
+    static let initialOutputMode: OutputMode = .terminal
 
     static func outputMode(for message: Message) -> OutputMode {
         if message.kind != .shell && message.resolvedRunInTerminal { return .terminal }
         if message.resolvedShowResponse { return .response }
         return .none
+    }
+
+    static func showsTimeout(for outputMode: OutputMode) -> Bool {
+        outputMode != .terminal
+    }
+
+    static func canonicalAccountPath(_ path: String?) -> String? {
+        guard let path, !path.isEmpty else { return nil }
+        return ProviderAccountContext.canonicalAccountDirectory(
+            URL(fileURLWithPath: path)
+        ).path
+    }
+
+    /// Normaliza tanto a seleção restaurada quanto a lista atual. Assim uma
+    /// task legada que persistiu um symlink continua mirando a mesma conta ao
+    /// ser aberta e salva, em vez de cair silenciosamente no default.
+    static func effectiveAccountPath(
+        selection: String?,
+        accounts: [URL]
+    ) -> String? {
+        guard let selected = canonicalAccountPath(selection) else {
+            return nil
+        }
+        let available = Set(accounts.map {
+            ProviderAccountContext.canonicalAccountDirectory($0).path
+        })
+        return available.contains(selected) ? selected : nil
     }
 
     @ObservedObject var state: AppState
@@ -31,16 +58,21 @@ struct AgendamentoFormSheet: View {
     @State private var effort: Message.Effort = Message.defaultEffort
     @State private var safeMode = Message.defaultSafeMode
     @State private var codexModel = ""
-    @State private var codexReasoning: Message.CodexReasoning = .low
+    @State private var codexReasoning: Message.CodexReasoning? = nil
     @State private var outputMode: OutputMode = Self.initialOutputMode
+    @State private var timeoutSeconds: Int?
     @State private var notifyOnSuccess = false
     @State private var account: String? = nil
     @State private var skill: String? = nil
     @State private var availableSkills: [SkillRef] = []
+    @State private var skillRefreshGeneration: UInt = 0
+    @State private var skillRefreshTask: Task<Void, Never>? = nil
+    @State private var codexPluginInventories: [String: Data] = [:]
     @State private var workingDir = ""
     @State private var repetition: ScheduledTask.Repetition = .fixed
     @State private var times: [Int] = [9 * 60]
     @State private var weekdays: Set<Int> = Set(1...7)
+    @State private var bootstrapWhenInactive = false
     @State private var enabled = true
 
     /// Todo o estado restaurável de um agendamento existente (ou os defaults
@@ -55,8 +87,9 @@ struct AgendamentoFormSheet: View {
         var effort = Message.defaultEffort
         var safeMode = Message.defaultSafeMode
         var codexModel = ""
-        var codexReasoning: Message.CodexReasoning = .low
+        var codexReasoning: Message.CodexReasoning?
         var outputMode = AgendamentoFormSheet.initialOutputMode
+        var timeoutSeconds: Int?
         var notifyOnSuccess = false
         var account: String?
         var skill: String?
@@ -64,6 +97,7 @@ struct AgendamentoFormSheet: View {
         var repetition: ScheduledTask.Repetition = .fixed
         var times: [Int] = [9 * 60]
         var weekdays: Set<Int> = Set(1...7)
+        var bootstrapWhenInactive = false
         var enabled = true
     }
 
@@ -77,6 +111,7 @@ struct AgendamentoFormSheet: View {
         restored.repetition = t.repetition
         restored.times = AgendaMath.normalized(t.times.isEmpty ? [9 * 60] : t.times)
         restored.weekdays = t.weekdays.isEmpty ? Set(1...7) : t.weekdays
+        restored.bootstrapWhenInactive = t.resolvedBootstrapWhenInactive
         restored.enabled = t.enabled
         let msg = t.resolvedCommand
         restored.text = msg.text
@@ -85,10 +120,11 @@ struct AgendamentoFormSheet: View {
         restored.effort = msg.resolvedEffort
         restored.safeMode = msg.resolvedSafeMode
         restored.codexModel = msg.codexModel ?? ""
-        restored.codexReasoning = msg.codexReasoning ?? .low
+        restored.codexReasoning = msg.codexReasoning
         restored.outputMode = outputMode(for: msg)
+        restored.timeoutSeconds = msg.timeoutSeconds
         restored.notifyOnSuccess = msg.notifyOnSuccess ?? false
-        restored.account = msg.configDir
+        restored.account = canonicalAccountPath(msg.configDir)
         restored.skill = msg.skill
         restored.workingDir = msg.workingDir ?? ""
         return restored
@@ -117,6 +153,7 @@ struct AgendamentoFormSheet: View {
         _codexModel = State(initialValue: restored.codexModel)
         _codexReasoning = State(initialValue: restored.codexReasoning)
         _outputMode = State(initialValue: restored.outputMode)
+        _timeoutSeconds = State(initialValue: restored.timeoutSeconds)
         _notifyOnSuccess = State(initialValue: restored.notifyOnSuccess)
         _account = State(initialValue: restored.account)
         _skill = State(initialValue: restored.skill)
@@ -124,6 +161,9 @@ struct AgendamentoFormSheet: View {
         _repetition = State(initialValue: restored.repetition)
         _times = State(initialValue: restored.times)
         _weekdays = State(initialValue: restored.weekdays)
+        _bootstrapWhenInactive = State(
+            initialValue: restored.bootstrapWhenInactive
+        )
         _enabled = State(initialValue: restored.enabled)
     }
 
@@ -164,6 +204,13 @@ struct AgendamentoFormSheet: View {
                 }
                 Toggle(strings.showResponse, isOn: outputModeBinding(.response))
                     .toggleStyle(.checkbox)
+                if Self.showsTimeout(for: outputMode) {
+                    TimeoutPicker(
+                        timeoutSeconds: $timeoutSeconds,
+                        kind: kind,
+                        strings: strings
+                    )
+                }
                 // Independente do modo de saída acima: notifica só em sucesso;
                 // com "Mostrar resposta" ligado, a notificação de resposta vence.
                 Toggle(strings.notifyOnSuccess, isOn: $notifyOnSuccess)
@@ -189,6 +236,15 @@ struct AgendamentoFormSheet: View {
             } else {
                 Text(strings.fixedContinuousDescription)
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle(
+                    strings.bootstrapWhenInactive,
+                    isOn: $bootstrapWhenInactive
+                )
+                .toggleStyle(.checkbox)
+                .font(.caption)
+                Text(strings.bootstrapWhenInactiveHelp)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 if continuousConflict {
                     Label(strings.continuousConflict,
                           systemImage: "exclamationmark.triangle")
@@ -221,16 +277,11 @@ struct AgendamentoFormSheet: View {
         // persistiria um configDir do provider errado. Shell não mira conta e
         // não pode ser contínuo.
         .onChange(of: kind) { newKind in
-            // Troca de tipo: revarre e limpa skill que não existe no novo
-            // provider (mesmo padrão da conta incompatível). Troca só de
-            // conta mantém a skill, com aviso no form.
-            defer {
-                refreshSkills()
-                if let current = skill,
-                   !availableSkills.contains(where: { $0.name == current }) {
-                    skill = nil
-                }
-            }
+            // A troca explícita de provider invalida o namespace da skill.
+            // Trocar só de conta mantém a seleção e mostra aviso caso a
+            // consulta autoritativa não a encontre.
+            skill = nil
+            defer { refreshSkills() }
             if newKind == .shell {
                 account = nil
                 if outputMode == .terminal { outputMode = .none }
@@ -247,10 +298,23 @@ struct AgendamentoFormSheet: View {
             if !valid { account = nil }
         }
         .onChange(of: account) { _ in refreshSkills() }
+        .onChange(of: workingDir) { _ in
+            // Plugins pertencem à conta, não ao cwd. Recalcula apenas os
+            // scopes do projeto e reaproveita o inventário já carregado,
+            // sem iniciar um subprocesso a cada caractere digitado.
+            refreshSkills(reloadCodexPlugins: false)
+        }
         .onChange(of: skill) { newSkill in
             // Skill exige safe-mode desligado; limpar a skill não religa
             // sozinho (o usuário reabilita o toggle se quiser).
             if newSkill?.isEmpty == false { safeMode = false }
+        }
+        .onDisappear {
+            // A consulta do CLI pode terminar depois de o sheet fechar.
+            // Invalida a geração para uma resposta tardia não alterar state.
+            skillRefreshGeneration &+= 1
+            skillRefreshTask?.cancel()
+            skillRefreshTask = nil
         }
     }
 
@@ -361,7 +425,14 @@ struct AgendamentoFormSheet: View {
     /// Recalcula as skills da conta alvo (abrir o sheet / trocar conta /
     /// trocar tipo). Conta nil = default global do provider — o mesmo
     /// diretório que o dispatch resolveria.
-    private func refreshSkills() {
+    private func refreshSkills(reloadCodexPlugins: Bool = true) {
+        if reloadCodexPlugins {
+            skillRefreshGeneration &+= 1
+            skillRefreshTask?.cancel()
+            skillRefreshTask = nil
+        }
+        let generation = skillRefreshGeneration
+
         guard kind != .shell else {
             availableSkills = []
             return
@@ -369,7 +440,63 @@ struct AgendamentoFormSheet: View {
         let provider: Provider = kind == .codex ? .codex : .claude
         let dir = account.map { URL(fileURLWithPath: $0) }
             ?? (provider == .codex ? AppState.defaultCodexConfigDir : AppState.defaultConfigDir)
-        availableSkills = SkillCatalog.skills(for: provider, at: dir)
+        let inventoryKey =
+            ProviderAccountContext.canonicalAccountDirectory(dir).path
+        let cachedInventory = provider == .codex
+            ? codexPluginInventories[inventoryKey]
+            : nil
+
+        var localSkills = SkillCatalog.skills(
+            for: provider,
+            at: dir,
+            workingDir: selectedWorkingDirectoryURL,
+            codexPluginInventory: cachedInventory)
+        // Enquanto o inventário de plugins carrega (ou se o CLI estiver
+        // indisponível), preserve uma seleção Codex já persistida. Só uma
+        // resposta válida pode classificá-la como ausente.
+        if provider == .codex,
+           cachedInventory == nil,
+           let skill,
+           !skill.isEmpty,
+           !localSkills.contains(where: { $0.name == skill }) {
+            localSkills.append(SkillRef(name: skill))
+            localSkills.sort { $0.name < $1.name }
+        }
+        availableSkills = localSkills
+
+        guard provider == .codex,
+              reloadCodexPlugins else {
+            return
+        }
+        skillRefreshTask = Task { @MainActor in
+            let inventory = await CodexPluginInventoryLoader.load(
+                configDirectory: dir
+            )
+            guard !Task.isCancelled,
+                  generation == skillRefreshGeneration else {
+                return
+            }
+            skillRefreshTask = nil
+            guard let inventory else { return }
+            codexPluginInventories[inventoryKey] = inventory
+            availableSkills = SkillCatalog.skills(
+                for: provider,
+                at: dir,
+                workingDir: selectedWorkingDirectoryURL,
+                codexPluginInventory: inventory
+            )
+        }
+    }
+
+    private var selectedWorkingDirectoryURL: URL? {
+        let trimmed = workingDir.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !trimmed.isEmpty else { return nil }
+        return URL(
+            fileURLWithPath:
+                NSString(string: trimmed).expandingTildeInPath
+        )
     }
 
     /// Monta o agendamento normalizando defaults para nil.
@@ -378,9 +505,15 @@ struct AgendamentoFormSheet: View {
         let effectiveAccount: String?
         switch kind {
         case .claude:
-            effectiveAccount = state.accounts(for: .claude).contains(where: { $0.path == account }) ? account : nil
+            effectiveAccount = Self.effectiveAccountPath(
+                selection: account,
+                accounts: state.accounts(for: .claude)
+            )
         case .codex:
-            effectiveAccount = state.accounts(for: .codex).contains(where: { $0.path == account }) ? account : nil
+            effectiveAccount = Self.effectiveAccountPath(
+                selection: account,
+                accounts: state.accounts(for: .codex)
+            )
         case .shell:
             effectiveAccount = nil
         }
@@ -393,10 +526,14 @@ struct AgendamentoFormSheet: View {
             workingDir: kind != .shell && !workingDir.isEmpty ? workingDir : nil,
             showResponse: outputMode == .response ? true : nil,
             runInTerminal: kind != .shell && outputMode != .terminal ? false : nil,
+            timeoutSeconds: Message.normalizedTimeoutSeconds(
+                timeoutSeconds,
+                for: kind
+            ),
             notifyOnSuccess: notifyOnSuccess ? true : nil,
             codexModel: kind == .codex && !codexModel.trimmingCharacters(in: .whitespaces).isEmpty
                 ? codexModel.trimmingCharacters(in: .whitespaces) : nil,
-            codexReasoning: kind == .codex && codexReasoning != .low ? codexReasoning : nil,
+            codexReasoning: kind == .codex ? codexReasoning : nil,
             skill: kind != .shell && skill?.isEmpty == false ? skill : nil)
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         var task = ScheduledTask(uid: editing?.uid ?? UUID(),
@@ -404,7 +541,10 @@ struct AgendamentoFormSheet: View {
                                  command: command,
                                  repetition: repetition,
                                  times: repetition == .fixed ? times : [],
-                                 weekdays: repetition == .fixed ? weekdays : [])
+                                 weekdays: repetition == .fixed ? weekdays : [],
+                                 bootstrapWhenInactive: repetition == .continuous
+                                     ? bootstrapWhenInactive
+                                     : nil)
         task.enabled = enabled
         return task
     }

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 enum RunnerError: Error, Equatable {
     case cliNotFound(Provider)
@@ -29,49 +30,110 @@ final class PipeBuffer: @unchecked Sendable {
     /// Cap de segurança — o histórico trunca bem antes disso; evita reter
     /// respostas gigantes na memória.
     static let maxBytes = 256 * 1024
-    private var data = Data()
+    static let truncationMarker = "\n[…]\n"
+    private static let markerBytes = Data(truncationMarker.utf8).count
+    private static let headLimit = (maxBytes - markerBytes) / 2
+    private static let tailLimit = maxBytes - markerBytes - headLimit
+
+    /// Até o cap, `head` contém a saída inteira. Ao ultrapassá-lo, fazemos
+    /// uma única transição para uma janela de início + cauda rolante. Assim
+    /// não descartamos bytes nem exibimos marcador antes dos 256 KiB.
+    private var head = Data()
+    private var tail = Data()
+    private var isTruncated = false
     private let lock = NSLock()
 
     func append(_ chunk: Data) {
+        guard !chunk.isEmpty else { return }
         lock.lock()
-        if data.count < Self.maxBytes {
-            data.append(chunk.prefix(Self.maxBytes - data.count))
+        defer { lock.unlock() }
+
+        if !isTruncated {
+            if chunk.count <= Self.maxBytes - head.count {
+                head.append(chunk)
+                return
+            }
+
+            let completePrefix = head
+            head = Data(completePrefix.prefix(Self.headLimit))
+            if head.count < Self.headLimit {
+                head.append(chunk.prefix(Self.headLimit - head.count))
+            }
+
+            if chunk.count >= Self.tailLimit {
+                tail = Data(chunk.suffix(Self.tailLimit))
+            } else {
+                tail = Data(completePrefix.suffix(Self.tailLimit - chunk.count))
+                tail.append(chunk)
+            }
+            isTruncated = true
+            return
         }
-        lock.unlock()
+
+        if chunk.count >= Self.tailLimit {
+            tail = Data(chunk.suffix(Self.tailLimit))
+        } else {
+            let overflow = max(0, tail.count + chunk.count - Self.tailLimit)
+            if overflow > 0 {
+                tail.removeFirst(overflow)
+            }
+            tail.append(chunk)
+        }
     }
 
     func trimmedString() -> String {
         lock.lock()
-        let snapshot = data
+        let headSnapshot = head
+        let tailSnapshot = tail
+        let truncatedSnapshot = isTruncated
         lock.unlock()
-        return Self.validUTF8String(from: snapshot)
+
+        let output: String
+        if truncatedSnapshot {
+            output = Self.validUTF8Prefix(from: headSnapshot)
+                + Self.truncationMarker
+                + Self.validUTF8Fragment(from: tailSnapshot, mayStartMidCharacter: true)
+        } else {
+            output = Self.validUTF8Fragment(
+                from: headSnapshot,
+                mayStartMidCharacter: false
+            )
+        }
+        return output
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// `append` corta no `maxBytes` sem olhar para fronteiras de caractere,
-    /// então o corte pode cair no meio de uma sequência UTF-8 multibyte
-    /// (acentos, emojis). Nesse caso `String(data:encoding:.utf8)` falha
-    /// para o `Data` inteiro. Em vez de perder tudo, recua byte a byte (no
-    /// máximo 3, o tamanho da maior sequência UTF-8 incompleta possível) até
-    /// achar um prefixo válido.
-    private static func validUTF8String(from data: Data) -> String {
-        if let string = String(data: data, encoding: .utf8) {
-            return string
-        }
-        let minLength = max(0, data.count - 3)
-        var length = data.count
-        while length > minLength {
-            length -= 1
-            if let string = String(data: data.prefix(length), encoding: .utf8) {
-                return string
+    /// O limite de cada janela pode cair no meio de um caractere UTF-8.
+    /// Remove no máximo os três bytes incompletos de cada borda antes de
+    /// recorrer ao decoder tolerante (para saída binária/inválida da CLI).
+    private static func validUTF8Prefix(from data: Data) -> String {
+        validUTF8Fragment(from: data, mayStartMidCharacter: false)
+    }
+
+    private static func validUTF8Fragment(
+        from data: Data,
+        mayStartMidCharacter: Bool
+    ) -> String {
+        let maximumPrefixDrop = mayStartMidCharacter ? min(3, data.count) : 0
+        for prefixDrop in 0...maximumPrefixDrop {
+            let remaining = data.count - prefixDrop
+            for suffixDrop in 0...min(3, remaining) {
+                let start = data.index(data.startIndex, offsetBy: prefixDrop)
+                let end = data.index(data.endIndex, offsetBy: -suffixDrop)
+                let candidate = data[start..<end]
+                if let string = String(data: candidate, encoding: .utf8) {
+                    return string
+                }
             }
         }
-        return ""
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
 struct CommandRunner: CommandRunning {
-    var timeout: TimeInterval = 60
+    /// Override injetável para testes/integrações. Sem ele, cada execução
+    /// deriva o limite batch da própria mensagem.
+    private let timeoutOverride: TimeInterval?
     var binaryOverride: URL? // testes
     var shellOverride: URL? // testes
     /// Conta a mirar. Fixado no env do provider (`CLAUDE_CONFIG_DIR`/
@@ -79,6 +141,18 @@ struct CommandRunner: CommandRunning {
     /// do shell que lançou o app — senão o ping abre a janela de 5h numa
     /// conta diferente da que o usuário observa.
     var configDir: URL?
+
+    init(
+        timeout: TimeInterval? = nil,
+        binaryOverride: URL? = nil,
+        shellOverride: URL? = nil,
+        configDir: URL? = nil
+    ) {
+        timeoutOverride = timeout
+        self.binaryOverride = binaryOverride
+        self.shellOverride = shellOverride
+        self.configDir = configDir
+    }
 
     /// Caminhos comuns de instalação; fallback via shell de login cobre
     /// nvm/asdf e instalações exóticas (importante para open source).
@@ -92,16 +166,107 @@ struct CommandRunner: CommandRunning {
         }
     }
 
-    static func locate(_ provider: Provider) -> URL? {
+    static func locate(
+        _ provider: Provider,
+        isCancelled: () -> Bool = { false }
+    ) -> URL? {
+        guard !isCancelled() else { return nil }
         let fm = FileManager.default
         for path in candidatePaths(for: provider) {
+            guard !isCancelled() else { return nil }
             let expanded = NSString(string: path).expandingTildeInPath
             if fm.isExecutableFile(atPath: expanded) {
                 return URL(fileURLWithPath: expanded)
             }
         }
+        guard !isCancelled() else { return nil }
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        return locateViaShell(shell: URL(fileURLWithPath: shell), cliName: provider.cliName)
+        return locateViaShell(
+            shell: URL(fileURLWithPath: shell),
+            cliName: provider.cliName,
+            isCancelled: isCancelled
+        )
+    }
+
+    /// `Foundation.Process` não expõe uma forma de criar atomicamente um
+    /// process group próprio. Portanto nunca usamos `kill(-pid, ...)`: sem
+    /// essa garantia, o PID negativo poderia representar o grupo do próprio
+    /// Ohayo. No macOS, `proc_listchildpids` permite identificar e sinalizar
+    /// apenas PIDs positivos que pertencem à árvore da CLI.
+    private static func descendantProcessIDs(of rootPID: pid_t) -> [pid_t] {
+        guard rootPID > 1 else { return [] }
+        var visited: Set<pid_t> = [rootPID]
+        var postorder: [pid_t] = []
+
+        func visit(_ parentPID: pid_t) {
+            for childPID in directChildProcessIDs(of: parentPID)
+                where childPID > 1 && childPID != getpid()
+                    && visited.insert(childPID).inserted {
+                visit(childPID)
+                postorder.append(childPID)
+            }
+        }
+
+        visit(rootPID)
+        return postorder
+    }
+
+    private static func directChildProcessIDs(of parentPID: pid_t) -> [pid_t] {
+        let estimate = proc_listchildpids(parentPID, nil, 0)
+        guard estimate > 0 else { return [] }
+        var capacity = max(16, Int(estimate))
+
+        for attempt in 0..<2 {
+            var pids = [pid_t](repeating: 0, count: capacity)
+            let count = pids.withUnsafeMutableBytes { bytes -> Int32 in
+                guard let baseAddress = bytes.baseAddress else { return 0 }
+                return proc_listchildpids(parentPID, baseAddress, Int32(bytes.count))
+            }
+            guard count > 0 else { return [] }
+            if Int(count) < capacity || attempt == 1 {
+                return Array(pids.prefix(Int(count))).filter { $0 > 1 }
+            }
+            capacity *= 2
+        }
+        return []
+    }
+
+    private static func processExists(_ pid: pid_t) -> Bool {
+        guard pid > 1 else { return false }
+        errno = 0
+        return kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    private static func signal(_ signal: Int32, processIDs: [pid_t]) {
+        let appPID = getpid()
+        var signaled = Set<pid_t>()
+        for pid in processIDs
+            where pid > 1 && pid != appPID && signaled.insert(pid).inserted {
+            kill(pid, signal)
+        }
+    }
+
+    /// Reconsulta os descendentes ainda rastreáveis antes do SIGKILL. A
+    /// enumeração é necessariamente best-effort (há uma corrida inerente sem
+    /// `posix_spawn` com POSIX_SPAWN_SETPGROUP), mas mantém o sinal restrito a
+    /// PIDs positivos observados na árvore — nunca ao grupo do app.
+    private static func forceKillTargets(
+        rootPID: pid_t,
+        initiallyTracked: [pid_t]
+    ) -> [pid_t] {
+        var targets: [pid_t] = []
+        var seen = Set<pid_t>()
+        let roots = initiallyTracked + [rootPID]
+        for pid in roots where processExists(pid) {
+            for descendant in descendantProcessIDs(of: pid)
+                where seen.insert(descendant).inserted {
+                targets.append(descendant)
+            }
+            if seen.insert(pid).inserted {
+                targets.append(pid)
+            }
+        }
+        return targets
     }
 
     /// Fallback: pergunta ao shell de login onde está o binário (cobre nvm/asdf
@@ -112,7 +277,13 @@ struct CommandRunner: CommandRunning {
     /// sempre — e como `locate()` roda dentro de `run()`, o `isRunning` do
     /// FireController nunca é liberado e TODO disparo futuro é descartado em
     /// silêncio até reiniciar o app.
-    static func locateViaShell(shell: URL, cliName: String, timeout: TimeInterval = 10) -> URL? {
+    static func locateViaShell(
+        shell: URL,
+        cliName: String,
+        timeout: TimeInterval = 10,
+        isCancelled: () -> Bool = { false }
+    ) -> URL? {
+        guard !isCancelled() else { return nil }
         let process = Process()
         process.executableURL = shell
         process.arguments = ["-l", "-c", "command -v \(cliName)"]
@@ -144,16 +315,32 @@ struct CommandRunner: CommandRunning {
         // que pendura não pode travar a busca para sempre (o guard isRunning do
         // FireController depende de locate() retornar).
         let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline { usleep(50_000) }
+        while process.isRunning
+            && Date() < deadline
+            && !isCancelled() {
+            usleep(50_000)
+        }
         if process.isRunning {
-            process.terminate() // SIGTERM; escala para SIGKILL se ignorado.
+            let rootPID = process.processIdentifier
+            let descendants = descendantProcessIDs(of: rootPID)
+            signal(SIGTERM, processIDs: descendants + [rootPID])
             let grace = Date().addingTimeInterval(1)
-            while process.isRunning && Date() < grace { usleep(50_000) }
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            while (process.isRunning || descendants.contains(where: processExists))
+                    && Date() < grace {
+                usleep(50_000)
+            }
+            signal(
+                SIGKILL,
+                processIDs: forceKillTargets(
+                    rootPID: rootPID,
+                    initiallyTracked: descendants
+                )
+            )
             clearHandlers()
             return nil
         }
         clearHandlers()
+        guard !isCancelled() else { return nil }
         if let rest = try? outPipe.fileHandleForReading.readToEnd(), !rest.isEmpty {
             outBuffer.append(rest)
         }
@@ -169,6 +356,7 @@ struct CommandRunner: CommandRunning {
 
     func run(_ message: Message) async -> Result<String, RunnerError> {
         let process = Process()
+        var providerInput: Data?
         switch message.kind {
         case .claude:
             guard let binary = binaryOverride ?? Self.locate(.claude) else {
@@ -183,8 +371,8 @@ struct CommandRunner: CommandRunning {
                         "--model", message.resolvedModel.cliValue,
                         "--effort", message.resolvedEffort.rawValue]
             if message.resolvedSafeMode { args.append("--safe-mode") }
-            args.append(message.resolvedPromptText)
             process.arguments = args
+            providerInput = Data(message.resolvedPromptText.utf8)
         case .shell:
             // Comando cru: shell de login para PATH/aliases/pipes/variáveis
             // funcionarem — dá utilidade ao app fora do Claude.
@@ -210,8 +398,8 @@ struct CommandRunner: CommandRunning {
             if let reasoning = message.codexReasoning {
                 args += ["-c", "model_reasoning_effort=\"\(reasoning.rawValue)\""]
             }
-            args.append(message.resolvedPromptText)
             process.arguments = args
+            providerInput = Data(message.resolvedPromptText.utf8)
         }
         let home = NSHomeDirectory()
         // Diretório de trabalho: override da mensagem (se não vazio) senão o home.
@@ -224,21 +412,33 @@ struct CommandRunner: CommandRunning {
         var env = ProcessInfo.processInfo.environment
         let extraPath = "/opt/homebrew/bin:/usr/local/bin:\(home)/.local/bin"
         env["PATH"] = [env["PATH"], extraPath].compactMap { $0 }.joined(separator: ":")
-        // Sempre fixa a conta alvo no env do provider da mensagem. Prioridade:
-        // override da mensagem → conta injetada (só Claude) → default do provider.
-        // Definir explicitamente sobrescreve qualquer valor herdado do ambiente.
-        let messageConfigDir = (message.configDir?.isEmpty == false)
-            ? URL(fileURLWithPath: message.configDir!) : nil
-        let provider: Provider = message.kind == .codex ? .codex : .claude
-        let fallbackName = provider == .codex ? ".codex" : ".claude"
-        env[provider.envKey] = (messageConfigDir ?? configDir
-            ?? URL(fileURLWithPath: home).appendingPathComponent(fallbackName)).path
+        // Shell cru preserva o ambiente recebido sem ganhar uma conta de
+        // provedor artificial. Para Claude/Codex, resolve a conta efetiva e
+        // aplica a semântica própria do provider: Claude nativo precisa de
+        // `CLAUDE_CONFIG_DIR` ausente; perfis custom e Codex usam override.
+        if message.kind != .shell {
+            let provider: Provider = message.kind == .codex ? .codex : .claude
+            let messageConfigDir = (message.configDir?.isEmpty == false)
+                ? URL(fileURLWithPath: message.configDir!) : nil
+            // `configDir` é o fallback legado/injetado da conta Claude. Nunca
+            // pode vazar para Codex — sem conta explícita, Codex usa ~/.codex.
+            let injectedConfigDir = provider == .claude ? configDir : nil
+            let account = ProviderAccountContext(
+                provider: provider,
+                configDirectory: messageConfigDir ?? injectedConfigDir
+            )
+            env = account.applyingAccountEnvironment(to: env)
+        }
         process.environment = env
 
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
+        let inputPipe = providerInput.map { _ in Pipe() }
+        if let inputPipe {
+            process.standardInput = inputPipe
+        }
 
         // Drena os pipes concorrentemente enquanto o processo roda: se
         // ninguem ler, uma saida maior que o buffer do SO (~64KB) trava o
@@ -260,12 +460,31 @@ struct CommandRunner: CommandRunning {
         do {
             try process.run()
         } catch {
+            try? inputPipe?.fileHandleForWriting.close()
             outPipe.fileHandleForReading.readabilityHandler = nil
             errPipe.fileHandleForReading.readabilityHandler = nil
             return .failure(.failed(error.localizedDescription))
         }
+        if let inputPipe, let providerInput {
+            // Escreve fora da task chamadora: uma CLI fake/antiga que não leia
+            // stdin não pode bloquear `run()` se o prompt exceder o pipe do SO.
+            // Fechar o writer sinaliza EOF às CLIs que consomem o prompt.
+            let writer = inputPipe.fileHandleForWriting
+            DispatchQueue.global(qos: .utility).async {
+                try? writer.write(contentsOf: providerInput)
+                try? writer.close()
+            }
+        }
 
-        let deadline = Date().addingTimeInterval(timeout)
+        // Terminal interativo é lançado por `TerminalLauncher` e não passa por
+        // este executor. Toda chamada direta a `CommandRunner` é batch, mesmo
+        // se receber uma mensagem marcada como Terminal; nesse estado
+        // inconsistente, usa o timeout persistido ou o default do provider.
+        let messageTimeout = message.resolvedTimeoutSeconds
+            ?? message.timeoutSeconds
+            ?? Message.defaultTimeoutSeconds(for: message.kind)
+        let effectiveTimeout = timeoutOverride ?? TimeInterval(messageTimeout)
+        let deadline = Date().addingTimeInterval(effectiveTimeout)
         while process.isRunning && Date() < deadline {
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
@@ -277,14 +496,22 @@ struct CommandRunner: CommandRunning {
             // reintroduzindo o mesmo bug (subprocesso que nunca reporta
             // término) na branch de timeout. Então limitamos a espera: um
             // grace period curto e, se ainda vivo, escalamos para SIGKILL.
-            process.terminate()
+            let rootPID = process.processIdentifier
+            let descendants = Self.descendantProcessIDs(of: rootPID)
+            Self.signal(SIGTERM, processIDs: descendants + [rootPID])
             let graceDeadline = Date().addingTimeInterval(2)
-            while process.isRunning && Date() < graceDeadline {
+            while (process.isRunning
+                   || descendants.contains(where: Self.processExists))
+                    && Date() < graceDeadline {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
-            if process.isRunning {
-                kill(process.processIdentifier, SIGKILL)
-            }
+            Self.signal(
+                SIGKILL,
+                processIDs: Self.forceKillTargets(
+                    rootPID: rootPID,
+                    initiallyTracked: descendants
+                )
+            )
         }
 
         errPipe.fileHandleForReading.readabilityHandler = nil

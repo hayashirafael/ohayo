@@ -59,9 +59,10 @@ struct CLIAuthenticationChecker: AuthenticationChecking {
         let process = Process()
         process.executableURL = binary
         process.arguments = args
-        var environment = ProcessInfo.processInfo.environment
-        environment[provider.envKey] = configDir.standardizedFileURL.path
-        process.environment = environment
+        let account = ProviderAccountContext(provider: provider, configDirectory: configDir)
+        process.environment = account.applyingAccountEnvironment(
+            to: ProcessInfo.processInfo.environment
+        )
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()

@@ -11,14 +11,14 @@ final class SingleInstanceLock {
         AppPaths.instanceLockPath()
     }
 
-    /// `true` quando este processo obteve o lock; `false` quando outra
-    /// instância viva já o segura. Falha inesperada de I/O não bloqueia o app
-    /// (melhor duas instâncias do que nenhuma).
+    /// `true` somente quando este processo obteve o lock. Outra instância ou
+    /// falha de I/O retornam `false`: disparar tarefas duas vezes é mais perigoso
+    /// do que impedir o launch e pedir que o usuário corrija o ambiente.
     func acquire(path: String = SingleInstanceLock.defaultPath) -> Bool {
         let dir = (path as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let handle = open(path, O_CREAT | O_RDWR, 0o644)
-        guard handle >= 0 else { return true }
+        guard handle >= 0 else { return false }
         guard flock(handle, LOCK_EX | LOCK_NB) == 0 else {
             close(handle)
             return false

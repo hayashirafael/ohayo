@@ -19,6 +19,16 @@ final class AppEnvironment: ObservableObject {
     private var statusTimer: Timer?
     /// Última reconfiguração agendada — os testes aguardam via `.value`.
     private(set) var reconfigureTask: Task<Void, Never>?
+    /// Garante last-write-wins quando uma configuração antiga fica suspensa
+    /// em um bootstrap enquanto a pessoa edita/remove tarefas.
+    private var reconfigureGeneration: UInt = 0
+    /// Snapshot da disponibilidade dos alvos contínuos. Mudanças no
+    /// filesystem não publicam `$tasks`; status/wake usam este mapa para
+    /// reincluir uma conta quando um volume volta (ou retirá-la quando some).
+    private var continuousAccountAvailability: [UUID: Bool] = [:]
+    /// Último catch-up de wake/clock-change — exposto apenas como seam
+    /// determinístico para testes aguardarem a operação real, sem sleeps.
+    private(set) var wakeTask: Task<Void, Never>?
 
     /// Parâmetros injetáveis só para teste (nil = produção).
     /// `probeCLIs: false` pula a sonda de launch (spawna login shell).
@@ -26,31 +36,51 @@ final class AppEnvironment: ObservableObject {
          taskScheduler: TaskScheduler? = nil,
          detector: SessionDetecting = SessionDetector(),
          terminalLauncher: TerminalLaunching = TerminalLauncher(),
+         runner: CommandRunning = CommandRunner(),
+         notifier: Notifying = SystemNotifier(),
+         authenticationChecker: AuthenticationChecking = CLIAuthenticationChecker(),
          probeCLIs: Bool = true) {
+        // Depois de o lock de instância ser adquirido, nenhum script de outro
+        // Ohayo ainda está sendo entregue. Resíduos de crash podem ser
+        // desvinculados imediatamente (sessões já abertas mantêm o fd).
+        TerminalLauncher.cleanupStaleScripts(olderThan: 0)
         let state = state ?? AppState()
         let taskScheduler = taskScheduler ?? TaskScheduler()
         let detector = detector
         self.state = state
         self.detector = detector
         self.controller = FireController(state: state, detector: detector,
-                                         runner: CommandRunner(configDir: AppState.defaultConfigDir),
+                                         runner: runner,
                                          terminalLauncher: terminalLauncher,
-                                         notifier: SystemNotifier(),
-                                         authenticationChecker: CLIAuthenticationChecker())
+                                         notifier: notifier,
+                                         authenticationChecker: authenticationChecker)
         self.renewalEngine = RenewalEngine(detector: detector)
         self.taskScheduler = taskScheduler
 
-        renewalEngine.onRenew = { [weak self] account in
-            guard let self,
-                  let task = self.state.tasks.first(where: {
-                      $0.enabled && $0.repetition == .continuous
-                          && self.state.accountDir(for: $0) == account
-                  }) else { return true }
-            return await self.controller.fire(message: task.resolvedCommand, origin: .renewal,
-                                              taskName: task.name)
+        renewalEngine.onRenew = { [weak self] account, trigger in
+            guard let self else { return .paused }
+            return await self.dispatchRenewal(
+                account: account,
+                trigger: trigger
+            )
         }
         renewalEngine.onStatus = { [weak self] next in
             self?.state.nextRenewals = next
+        }
+        renewalEngine.onQuotaUnavailable = { [weak self] reasons in
+            self?.state.quotaUnavailableReasons = reasons
+        }
+        renewalEngine.onNeedsAttention = { [weak self] accounts in
+            self?.state.renewalNeedsAttention = accounts
+        }
+        renewalEngine.onRecoveryState = { [weak self] account, recovery in
+            guard let self else { return }
+            let matches = self.state.tasks.filter {
+                $0.enabled && $0.repetition == .continuous
+                    && self.state.accountDir(for: $0) == account
+            }
+            guard matches.count == 1, let task = matches.first else { return }
+            self.state.setRenewalRecoveryState(recovery, for: task)
         }
 
         taskScheduler.onFire = { [weak self] task in
@@ -65,7 +95,9 @@ final class AppEnvironment: ObservableObject {
                     message: cmd, origin: .agenda))
                 return true
             }
-            return await self.controller.fire(message: cmd, origin: .agenda, taskName: task.name)
+            let outcome = await self.controller.fire(
+                message: cmd, origin: .agenda, taskName: task.name)
+            return outcome.advancesSchedule
         }
         taskScheduler.onStatus = { [weak self] next in
             self?.state.nextTaskFires = next
@@ -86,23 +118,34 @@ final class AppEnvironment: ObservableObject {
                 }
             }
         }
+        // O wake de launch é agendado antes da primeira configuração
+        // assíncrona. Sem semear este snapshot, ele interpreta o estado
+        // inicial como uma mudança de filesystem, invalida a configuração
+        // recém-criada e pode adiar o primeiro bootstrap/retry.
+        continuousAccountAvailability =
+            currentContinuousAccountAvailability()
         // Ocorrências fixas que passaram com o app fechado: só registra no
         // histórico (nunca dispara retroativamente entre launches); depois
         // marca o heartbeat deste launch.
         state.recordMissedWhileClosed()
         state.recordAlive()
-        handleWake() // catch-up do boot via mesmo caminho do wake/clock-change
+        scheduleWakeHandling() // catch-up do boot via mesmo caminho do wake/clock-change
 
         let workspace = NSWorkspace.shared.notificationCenter
         observers.append(workspace.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.handleWake() }
+            Task { @MainActor [weak self] in self?.scheduleWakeHandling() }
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: .NSSystemClockDidChange, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.handleWake() }
+            Task { @MainActor [weak self] in self?.scheduleWakeHandling() }
+        })
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.scheduleWakeHandling() }
         })
 
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
@@ -117,7 +160,43 @@ final class AppEnvironment: ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in self?.reconfigureSchedules() }
             .store(in: &cancellables)
+        state.$pausedAccounts
+            .dropFirst()
+            .sink { [weak self] _ in self?.reconfigureSchedules() }
+            .store(in: &cancellables)
         reconfigureSchedules()
+    }
+
+    /// Último guard antes de entregar uma renovação. Mantido como método
+    /// separado para testar as corridas entre edição/pausa e um timer que já
+    /// entrou no MainActor.
+    func dispatchRenewal(
+        account: URL,
+        trigger: RenewalEngine.Trigger
+    ) async -> DispatchOutcome {
+        guard !state.isPaused(account) else { return .paused }
+        let matches = state.tasks.filter {
+            $0.enabled && $0.repetition == .continuous
+                && state.accountDir(for: $0) == account
+        }
+        // Payload legado/corrompido pode conter dois contínuos na mesma
+        // conta. Nunca deixa o consentimento de um disparar o comando do
+        // outro; a UI continua disponível para a pessoa corrigir o conflito.
+        guard matches.count == 1, let task = matches.first else {
+            return .needsAttention
+        }
+        if trigger == .bootstrap {
+            // O setter da task publica antes de o reconfigure assíncrono
+            // retirar a conta do engine. Revalida a escolha no limite do
+            // dispatch para fechar essa janela de corrida.
+            guard task.resolvedBootstrapWhenInactive else { return .paused }
+        }
+        let outcome = await controller.fire(
+            message: task.resolvedCommand,
+            origin: .renewal,
+            taskName: task.name
+        )
+        return outcome
     }
 
     /// Disparo manual imediato de um agendamento (botão "Executar agora" da
@@ -143,6 +222,8 @@ final class AppEnvironment: ObservableObject {
     /// Reconfigura os dois motores a partir da lista unificada: contínuos
     /// alimentam o RenewalEngine (por conta), fixos o TaskScheduler.
     private func reconfigureSchedules() {
+        reconfigureGeneration &+= 1
+        let generation = reconfigureGeneration
         // TODAS as leituras de `state` ficam DENTRO do Task: o sink de
         // `$tasks` dispara no willSet (@Published publica antes de gravar o
         // valor), então uma leitura síncrona aqui veria a lista ANTIGA e os
@@ -150,26 +231,77 @@ final class AppEnvironment: ObservableObject {
         // Quando o Task roda na MainActor, o setter já completou.
         reconfigureTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            guard generation == self.reconfigureGeneration else { return }
             // Contínuo com pasta ausente não entra no set (nunca arma);
             // registra a falha no histórico, uma vez, para paridade com o
             // caminho fixo.
             self.state.recordMissingFolderContinuous()
-            var accounts: Set<URL> = []
-            for task in self.state.tasks where task.enabled && task.repetition == .continuous {
-                if let dir = self.state.accountDir(for: task) { accounts.insert(dir) }
+            var continuousByAccount: [URL: [ScheduledTask]] = [:]
+            for task in self.state.tasks
+                where task.enabled && task.repetition == .continuous {
+                if let dir = self.state.accountDir(for: task),
+                   !self.state.isPaused(dir) {
+                    continuousByAccount[dir, default: []].append(task)
+                }
             }
-            let fixed = self.state.tasks.filter { $0.repetition == .fixed }
+            var accounts: Set<URL> = []
+            var bootstrapAccounts: Set<URL> = []
+            var recoveryStates: [URL: RenewalRecoveryState] = [:]
+            var accountRevisions: [URL: String] = [:]
+            var accountProviders: [URL: Provider] = [:]
+            self.continuousAccountAvailability =
+                self.currentContinuousAccountAvailability()
+            for (dir, tasks) in continuousByAccount where tasks.count == 1 {
+                accounts.insert(dir)
+                if let task = tasks.first {
+                    accountRevisions[dir] = task.renewalRevision
+                    accountProviders[dir] =
+                        task.resolvedCommand.kind == .codex
+                        ? .codex
+                        : .claude
+                    if task.resolvedBootstrapWhenInactive {
+                        // Este set representa consentimento, não elegibilidade.
+                        bootstrapAccounts.insert(dir)
+                    }
+                    if let recovery =
+                        self.state.renewalRecoveryState(for: task) {
+                        recoveryStates[dir] = recovery
+                    }
+                }
+            }
+            let fixed = self.state.tasks.filter { task in
+                guard task.repetition == .fixed else { return false }
+                guard let dir = self.state.accountDir(for: task) else {
+                    // Shell e pasta explícita ausente continuam no scheduler:
+                    // o primeiro executa normalmente; a segunda registra a
+                    // falha sem cair na conta padrão.
+                    return true
+                }
+                return !self.state.isPaused(dir)
+            }
             self.log.info("reconfigure: fixos=\(fixed.count, privacy: .public) continuos=\(accounts.count, privacy: .public)")
+            // A agenda fixa é independente do bootstrap contínuo. Aplicá-la
+            // primeiro impede que um dispatch longo atrase remoções/edições;
+            // o próprio scheduler protege callbacks em voo por ocorrência.
+            await self.taskScheduler.configure(tasks: fixed, paused: false)
+            guard generation == self.reconfigureGeneration else { return }
             // O pause agora é por conta e aplicado no FireController; os engines
             // nunca pausam globalmente (o parâmetro fica para os testes).
-            await self.renewalEngine.configure(accounts: accounts, paused: false)
-            await self.taskScheduler.configure(tasks: fixed, paused: false)
+            await self.renewalEngine.configure(
+                accounts: accounts,
+                bootstrapAccounts: bootstrapAccounts,
+                recoveryStates: recoveryStates,
+                accountRevisions: accountRevisions,
+                accountProviders: accountProviders,
+                paused: false
+            )
         }
     }
 
     /// Tick periódico: re-arma as renovações e a agenda (alimenta ícone e "3h12" na barra).
     func statusTick() async {
         state.recordAlive()
+        reconfigureIfAccountAvailabilityChanged()
         await renewalEngine.rearmAll()
         await taskScheduler.rearmAll()
         // Publica um pulso mesmo quando `rearmAll` não mutou os snapshots
@@ -186,19 +318,56 @@ final class AppEnvironment: ObservableObject {
             accountDir: { [state] in state.accountDir(for: $0) },
             label: { [state] in state.label(for: $0) })
         var result: [URL: Date] = [:]
+        var unavailable: [URL: String] = [:]
         for dir in accounts {
-            if let end = await detector.activeWindowEnd(account: dir), end > Date() {
+            let normalized = dir.standardizedFileURL
+            switch await detector.quotaWindowState(
+                account: dir,
+                provider: state.provider(for: dir)
+            ) {
+            case .active(let end) where end > Date():
                 result[dir.standardizedFileURL] = end
+            case .unavailable(let reason):
+                unavailable[normalized] = reason
+            case .active, .inactive:
+                break
             }
         }
         state.windowEnds = result
+        state.quotaUnavailableReasons = unavailable
     }
 
-    private func handleWake() {
-        Task { @MainActor [weak self] in
-            self?.log.info("wake/clock-change: reconfigurando catch-up")
-            await self?.renewalEngine.handleWake()
-            await self?.taskScheduler.handleWake()
+    /// Executa o catch-up agora. Mantido como seam interno para testes
+    /// determinísticos; observers e launch o agendam por
+    /// `scheduleWakeHandling()`.
+    func handleWake() async {
+        log.info("wake/clock-change: reconfigurando catch-up")
+        reconfigureIfAccountAvailabilityChanged()
+        await renewalEngine.handleWake()
+        await taskScheduler.handleWake()
+    }
+
+    private func reconfigureIfAccountAvailabilityChanged() {
+        let current = currentContinuousAccountAvailability()
+        if current != continuousAccountAvailability {
+            reconfigureSchedules()
+        }
+    }
+
+    private func currentContinuousAccountAvailability() -> [UUID: Bool] {
+        var current: [UUID: Bool] = [:]
+        for task in state.tasks
+            where task.enabled
+                && task.repetition == .continuous
+                && task.resolvedCommand.kind != .shell {
+            current[task.uid] = state.accountDir(for: task) != nil
+        }
+        return current
+    }
+
+    private func scheduleWakeHandling() {
+        wakeTask = Task { @MainActor [weak self] in
+            await self?.handleWake()
         }
     }
 }

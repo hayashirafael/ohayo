@@ -2,6 +2,35 @@ import XCTest
 @testable import Ohayo
 
 final class AuthenticationCheckerTests: XCTestCase {
+    func testClaudeNativoContinuaNativoQuandoPastaEhSymlink() throws {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-native-symlink-\(UUID().uuidString)")
+        let storage = home.appendingPathComponent("storage")
+        try fm.createDirectory(at: storage, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(
+            at: home.appendingPathComponent(".claude"),
+            withDestinationURL: storage
+        )
+        defer { try? fm.removeItem(at: home) }
+
+        let context = ProviderAccountContext(
+            provider: .claude,
+            configDirectory: home.appendingPathComponent(".claude"),
+            homeDirectory: home
+        )
+        let environment = context.applyingAccountEnvironment(
+            to: ["CLAUDE_CONFIG_DIR": "/perfil-herdado"]
+        )
+
+        XCTAssertTrue(context.isNative)
+        XCTAssertNil(environment["CLAUDE_CONFIG_DIR"])
+        XCTAssertEqual(
+            context.identityFile,
+            home.appendingPathComponent(".claude.json")
+        )
+    }
+
     private func makeScript(_ body: String) -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("fake-auth-(UUID().uuidString).sh")
@@ -28,6 +57,36 @@ final class AuthenticationCheckerTests: XCTestCase {
                                           configDir: URL(fileURLWithPath: "/tmp/claude-test"))
 
         XCTAssertEqual(result, .authenticated)
+    }
+
+    func testClaudeNativoNaoExportaClaudeConfigDir() async throws {
+        let envFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auth-env-\(UUID().uuidString).txt")
+        let binary = makeScript(
+            "printf '%s' \"${CLAUDE_CONFIG_DIR-<unset>}\" > '\(envFile.path)'; "
+                + "printf '{\"loggedIn\":true}\\n'; exit 0"
+        )
+        let checker = CLIAuthenticationChecker(binaryLocator: { _ in binary })
+
+        _ = await checker.status(for: .claude, configDir: AppState.defaultConfigDir)
+
+        XCTAssertEqual(try String(contentsOf: envFile, encoding: .utf8), "<unset>")
+    }
+
+    func testClaudeCustomPreservaClaudeConfigDir() async throws {
+        let envFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("auth-env-\(UUID().uuidString).txt")
+        let custom = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-custom-\(UUID().uuidString)")
+        let binary = makeScript(
+            "printf '%s' \"$CLAUDE_CONFIG_DIR\" > '\(envFile.path)'; "
+                + "printf '{\"loggedIn\":true}\\n'; exit 0"
+        )
+        let checker = CLIAuthenticationChecker(binaryLocator: { _ in binary })
+
+        _ = await checker.status(for: .claude, configDir: custom)
+
+        XCTAssertEqual(try String(contentsOf: envFile, encoding: .utf8), custom.path)
     }
 
     func testCodexMensagemNotLoggedInIdentificaLogout() async {

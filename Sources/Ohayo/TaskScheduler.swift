@@ -6,9 +6,8 @@ import os
 /// com relógio fake. O skip por sessão ativa acontece no FireController.
 @MainActor
 final class TaskScheduler {
-    /// Retorna `true` quando o disparo executou e `false` quando foi
-    /// descartado pelo guard `isRunning` do controller — nesse caso fica em
-    /// retry para a próxima chamada (statusTick, wake, outro fire).
+    /// Retorna `true` quando o outcome consumiu a ocorrência e `false` quando
+    /// uma falha transitória deve preservar a ocorrência para retry.
     var onFire: ((ScheduledTask) async -> Bool)?
     /// Snapshot de `nextFires` a cada mudança — vira "próxima qua 08:00" na UI.
     var onStatus: (([UUID: Date]) -> Void)?
@@ -23,6 +22,8 @@ final class TaskScheduler {
 
     private let clock: Clock
     private let calendar: Calendar
+    private let retryBaseDelay: TimeInterval
+    private let maximumRetryDelay: TimeInterval = 15 * 60
     private var tasks: [UUID: ScheduledTask] = [:]
     private var paused = false
     private var timers: [UUID: Timer] = [:]
@@ -34,15 +35,27 @@ final class TaskScheduler {
     /// Piso do catch-up avançado pela EDIÇÃO da tarefa — nunca alimenta o
     /// dedupe (editar não é disparar).
     private var catchUpFloor: [UUID: Date] = [:]
-    /// Disparos descartados pelo guard do controller, com a ocorrência a
-    /// re-tentar na próxima chamada (statusTick, wake, outro fire).
+    /// Falhas transitórias, com a ocorrência a re-tentar na próxima chamada
+    /// depois do backoff.
     private var pendingRetry: [UUID: Date] = [:]
+    private var retryAttempts: [UUID: Int] = [:]
+    private var retryNotBefore: [UUID: Date] = [:]
+    /// A ocorrência é reservada antes do callback suspensível. Isso fecha a
+    /// corrida timer + wake/statusTick enquanto um batch ainda está rodando;
+    /// o FireController pode enfileirar, mas o scheduler não cria um segundo
+    /// job para a mesma ocorrência.
+    private var inFlightOccurrences: [UUID: Date] = [:]
     /// Launch não dispara catch-up: só ocorrências perdidas depois disso contam.
     private let startedAt: Date
 
-    init(clock: Clock = SystemClock(), calendar: Calendar = .current) {
+    init(
+        clock: Clock = SystemClock(),
+        calendar: Calendar = .current,
+        retryBaseDelay: TimeInterval = 60
+    ) {
         self.clock = clock
         self.calendar = calendar
+        self.retryBaseDelay = retryBaseDelay
         self.startedAt = clock.now
     }
 
@@ -59,11 +72,15 @@ final class TaskScheduler {
         if paused {
             nextFires = [:]
             pendingRetry.removeAll()
+            retryAttempts.removeAll()
+            retryNotBefore.removeAll()
         } else {
             for uid in Array(nextFires.keys) where normalized[uid] == nil {
                 nextFires[uid] = nil
             }
             pendingRetry = pendingRetry.filter { normalized[$0.key] != nil }
+            retryAttempts = retryAttempts.filter { normalized[$0.key] != nil }
+            retryNotBefore = retryNotBefore.filter { normalized[$0.key] != nil }
             // Uid novo ou com conteúdo diferente (ex.: horário editado): o
             // timer armado aponta para o horário ANTIGO. Sem isso, `rearm` vê
             // `armed > now` com timer vivo e devolve cedo — a tarefa
@@ -75,6 +92,7 @@ final class TaskScheduler {
                 timers[uid]?.invalidate()
                 timers[uid] = nil
                 nextFires[uid] = nil
+                clearRetry(for: uid)
                 // Avança o piso do catch-up para o INÍCIO do minuto corrente
                 // (−1s): sem isso, o rearm poderia achar uma ocorrência do
                 // horário recém-criado/editado já perdida e disparar na hora
@@ -107,8 +125,14 @@ final class TaskScheduler {
 
     private func rearm(_ uid: UUID) async {
         guard let task = tasks[uid] else { return }
+        guard inFlightOccurrences[uid] == nil else { return }
         if let retry = pendingRetry[uid] {
+            if let notBefore = retryNotBefore[uid], notBefore > clock.now {
+                nextFires[uid] = notBefore
+                return
+            }
             pendingRetry[uid] = nil
+            retryNotBefore[uid] = nil
             await fire(task, occurrence: retry)
             return
         }
@@ -159,7 +183,7 @@ final class TaskScheduler {
 
     private func fire(_ task: ScheduledTask, occurrence: Date) async {
         guard !paused, tasks[task.uid] != nil else {
-            pendingRetry[task.uid] = nil
+            clearRetry(for: task.uid)
             return
         }
         // Dedupe por identidade: a mesma ocorrência nunca dispara duas vezes.
@@ -170,16 +194,49 @@ final class TaskScheduler {
             log.debug("fire: dedupe ocorrencia \(occurrence, privacy: .public) ja disparada uid \(task.uid.uuidString, privacy: .public)")
             return
         }
-        nextFires[task.uid] = nil
-        let didRun = await onFire?(task) ?? true
-        guard didRun else {
-            log.info("fire: descartado pelo guard do controller, em retry, uid \(task.uid.uuidString, privacy: .public)")
-            pendingRetry[task.uid] = occurrence
+        guard inFlightOccurrences[task.uid] == nil else {
+            log.debug("fire: ocorrencia em andamento uid \(task.uid.uuidString, privacy: .public)")
             return
         }
-        pendingRetry[task.uid] = nil
+        inFlightOccurrences[task.uid] = occurrence
+        nextFires[task.uid] = nil
+        let advancesSchedule = await onFire?(task) ?? true
+        inFlightOccurrences[task.uid] = nil
+        // Remoção/edição durante o callback já instalou seu próprio piso de
+        // catch-up. Não aplica retry/outcome da versão antiga à tarefa atual.
+        guard !paused, let currentTask = tasks[task.uid] else {
+            clearRetry(for: task.uid)
+            return
+        }
+        guard currentTask == task else {
+            clearRetry(for: task.uid)
+            await rearm(task.uid)
+            return
+        }
+        guard advancesSchedule else {
+            log.info("fire: falha transitoria, em retry, uid \(task.uid.uuidString, privacy: .public)")
+            let attempt = (retryAttempts[task.uid] ?? 0) + 1
+            retryAttempts[task.uid] = attempt
+            let exponent = min(attempt - 1, 10)
+            let delay = min(
+                maximumRetryDelay,
+                retryBaseDelay * pow(2, Double(exponent))
+            )
+            pendingRetry[task.uid] = occurrence
+            let retryAt = clock.now.addingTimeInterval(delay)
+            retryNotBefore[task.uid] = retryAt
+            nextFires[task.uid] = retryAt
+            return
+        }
+        clearRetry(for: task.uid)
         lastFiredOccurrence[task.uid] = occurrence
         log.info("fire: disparou ocorrencia \(occurrence, privacy: .public) uid \(task.uid.uuidString, privacy: .public)")
         await rearm(task.uid) // encadeia a próxima ocorrência
+    }
+
+    private func clearRetry(for uid: UUID) {
+        pendingRetry[uid] = nil
+        retryAttempts[uid] = nil
+        retryNotBefore[uid] = nil
     }
 }

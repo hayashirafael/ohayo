@@ -2,6 +2,9 @@ import Foundation
 
 enum FireResult: Codable, Equatable {
     case success
+    /// A sessão interativa foi aberta no Terminal; o Ohayo não acompanha o
+    /// processo até a conclusão e, portanto, não afirma sucesso.
+    case launched
     case skipped(activeUntil: Date)
     case failure(message: String)
     case missed(occurrence: Date)
@@ -35,7 +38,9 @@ struct EventIdentity: Equatable {
 
 struct Message: Codable, Identifiable {
     enum Kind: String, Codable { case claude, shell, codex }
-    enum CodexReasoning: String, Codable, CaseIterable { case minimal, low, medium, high }
+    enum CodexReasoning: String, Codable, CaseIterable {
+        case minimal, low, medium, high, xhigh
+    }
     enum Model: String, Codable, CaseIterable {
         case haiku, sonnet, opus
         var cliValue: String {
@@ -65,6 +70,9 @@ struct Message: Codable, Identifiable {
     var uid: UUID? = nil
     var showResponse: Bool? = nil
     var runInTerminal: Bool? = nil
+    /// Limite do processo batch, em segundos. nil usa o default seguro do
+    /// tipo de comando; Terminal interativo ignora este valor.
+    var timeoutSeconds: Int? = nil
     var notifyOnSuccess: Bool? = nil
     var codexModel: String? = nil
     var codexReasoning: CodexReasoning? = nil
@@ -80,13 +88,14 @@ struct Message: Codable, Identifiable {
         let safeModeValue = safeMode.map(String.init) ?? ""
         let showResponseValue = showResponse.map(String.init) ?? ""
         let runInTerminalValue = runInTerminal.map(String.init) ?? ""
+        let timeoutValue = timeoutSeconds.map(String.init) ?? ""
         let notifyOnSuccessValue = notifyOnSuccess.map(String.init) ?? ""
         let reasoningValue = codexReasoning?.rawValue ?? ""
         let values = [
             kind.rawValue, text, modelValue, effortValue, safeModeValue,
             configDir ?? "", workingDir ?? "", showResponseValue,
-            runInTerminalValue, notifyOnSuccessValue, codexModel ?? "", reasoningValue,
-            skill ?? ""
+            runInTerminalValue, timeoutValue, notifyOnSuccessValue,
+            codexModel ?? "", reasoningValue, skill ?? ""
         ]
         return values.joined(separator: "\u{1}")
     }
@@ -99,6 +108,7 @@ extension Message: Equatable {
             && lhs.configDir == rhs.configDir && lhs.workingDir == rhs.workingDir
             && lhs.showResponse == rhs.showResponse
             && lhs.runInTerminal == rhs.runInTerminal
+            && lhs.timeoutSeconds == rhs.timeoutSeconds
             && lhs.notifyOnSuccess == rhs.notifyOnSuccess
             && lhs.codexModel == rhs.codexModel && lhs.codexReasoning == rhs.codexReasoning
             && lhs.skill == rhs.skill
@@ -109,6 +119,19 @@ extension Message {
     static let defaultModel: Model = .haiku
     static let defaultEffort: Effort = .low
     static let defaultSafeMode = true
+    static let timeoutPresets = [60, 300, 900, 1_800]
+    static let defaultProviderTimeoutSeconds = 900
+    static let defaultShellTimeoutSeconds = 300
+    static func defaultTimeoutSeconds(for kind: Kind) -> Int {
+        kind == .shell
+            ? defaultShellTimeoutSeconds
+            : defaultProviderTimeoutSeconds
+    }
+    /// Defaults não precisam ocupar o payload persistido; sua ausência também
+    /// permite que uma versão futura ajuste o padrão de produção.
+    static func normalizedTimeoutSeconds(_ seconds: Int?, for kind: Kind) -> Int? {
+        seconds == defaultTimeoutSeconds(for: kind) ? nil : seconds
+    }
     var resolvedModel: Model { model ?? Self.defaultModel }
     var resolvedEffort: Effort { effort ?? Self.defaultEffort }
     /// Skill efetiva: nil e string vazia contam como "sem skill".
@@ -133,6 +156,12 @@ extension Message {
         case .shell: return false
         }
     }
+    /// Terminal interativo não tem processo filho monitorado pelo Ohayo, então
+    /// não existe timeout aplicável nesse modo.
+    var resolvedTimeoutSeconds: Int? {
+        guard !resolvedRunInTerminal else { return nil }
+        return timeoutSeconds ?? Self.defaultTimeoutSeconds(for: kind)
+    }
 }
 
 struct ScheduledTask: Identifiable, Equatable {
@@ -144,10 +173,42 @@ struct ScheduledTask: Identifiable, Equatable {
     var repetition: Repetition = .fixed
     var times: [Int] = []
     var weekdays: Set<Int> = []
+    /// `nil` identifica agendamentos anteriores ao consentimento explícito.
+    /// Como versões publicadas não iniciavam uma janela sem evidência, o
+    /// fallback seguro é `false`. Novos formulários persistem a escolha.
+    var bootstrapWhenInactive: Bool? = nil
     var enabled: Bool = true
 
     var id: UUID { uid }
     var resolvedCommand: Message { command ?? AppState.defaultMessage }
+    var resolvedBootstrapWhenInactive: Bool {
+        bootstrapWhenInactive ?? false
+    }
+
+    /// Identidade do payload executável usada para invalidar outcomes que
+    /// voltam depois de a pessoa editar uma tarefa em andamento. Nome e
+    /// horários, enabled e consentimento de bootstrap não alteram o comando
+    /// já entregue; conta/modelo/prompt/modo sim.
+    var renewalRevision: String {
+        let message = resolvedCommand
+        var values: [String] = []
+        values.append(uid.uuidString)
+        values.append(message.kind.rawValue)
+        values.append(message.text)
+        values.append(message.model?.rawValue ?? "")
+        values.append(message.effort?.rawValue ?? "")
+        values.append(message.safeMode.map(String.init) ?? "")
+        values.append(message.configDir ?? "")
+        values.append(message.workingDir ?? "")
+        values.append(message.showResponse.map(String.init) ?? "")
+        values.append(message.runInTerminal.map(String.init) ?? "")
+        values.append(message.timeoutSeconds.map(String.init) ?? "")
+        values.append(message.notifyOnSuccess.map(String.init) ?? "")
+        values.append(message.codexModel ?? "")
+        values.append(message.codexReasoning?.rawValue ?? "")
+        values.append(message.skill ?? "")
+        return values.joined(separator: "\u{1}")
+    }
 }
 
 /// Decodificação lossy de arrays: um elemento ilegível vira `nil` em vez de
@@ -163,7 +224,8 @@ struct FailableDecodable<T: Decodable>: Decodable {
 
 extension ScheduledTask: Codable {
     private enum CodingKeys: String, CodingKey {
-        case uid, name, command, repetition, times, weekdays, enabled
+        case uid, name, command, repetition, times, weekdays
+        case bootstrapWhenInactive, enabled
     }
 
     init(from decoder: Decoder) throws {
@@ -173,7 +235,15 @@ extension ScheduledTask: Codable {
         command = try c.decodeIfPresent(Message.self, forKey: .command)
         repetition = try c.decodeIfPresent(Repetition.self, forKey: .repetition) ?? .fixed
         times = try c.decodeIfPresent([Int].self, forKey: .times) ?? []
-        weekdays = try c.decodeIfPresent(Set<Int>.self, forKey: .weekdays) ?? []
+        let persistedWeekdays = try c.decodeIfPresent(
+            Set<Int>.self,
+            forKey: .weekdays
+        ) ?? []
+        weekdays = persistedWeekdays.filter { (1...7).contains($0) }
+        bootstrapWhenInactive = try c.decodeIfPresent(
+            Bool.self,
+            forKey: .bootstrapWhenInactive
+        )
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
     }
 }

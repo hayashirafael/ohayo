@@ -27,7 +27,8 @@ enum MenuPanelLogic {
     /// exibição e a data do próximo disparo.
     struct UpcomingEvent: Equatable {
         let taskUID: UUID
-        let account: URL
+        /// Tarefas shell não pertencem a uma conta de provedor.
+        let account: URL?
         let name: String
         let date: Date
     }
@@ -38,14 +39,24 @@ enum MenuPanelLogic {
     static func upcomingEvents(tasks: [ScheduledTask],
                                nextRenewals: [URL: Date], nextTaskFires: [UUID: Date],
                                isPaused: (URL) -> Bool,
+                               isQuotaUnavailable: (URL) -> Bool = { _ in false },
+                               needsAttention: (URL) -> Bool = { _ in false },
                                accountDir: (ScheduledTask) -> URL?, now: Date,
                                limit: Int, renewalFallbackName: String) -> [UpcomingEvent] {
         var events: [UpcomingEvent] = []
         for task in tasks where task.enabled {
-            guard let account = accountDir(task), !isPaused(account) else { continue }
+            let account = accountDir(task)
+            guard account != nil || task.resolvedCommand.kind == .shell else { continue }
+            if let account, isPaused(account) { continue }
+            if task.repetition == .continuous,
+               let account,
+               isQuotaUnavailable(account) || needsAttention(account) {
+                continue
+            }
             let date: Date?
             switch task.repetition {
-            case .continuous: date = nextRenewals[account]
+            case .continuous:
+                date = account.flatMap { nextRenewals[$0] }
             case .fixed: date = nextTaskFires[task.uid]
             }
             if let date, date > now {
@@ -59,15 +70,43 @@ enum MenuPanelLogic {
     }
 
     /// O que o painel mostra quando não há disparo futuro a exibir.
-    enum PanelEmptyState { case noSchedules, allPaused, waiting }
+    enum PanelEmptyState {
+        case noSchedules
+        case allPaused
+        case quotaUnavailable
+        case needsAttention
+        case waiting
+    }
 
     /// Sem agendamento habilitado → noSchedules; todas as contas agendadas
     /// pausadas → allPaused; senão está aguardando janela/data (waiting).
     static func emptyState(tasks: [ScheduledTask],
                            accountDir: (ScheduledTask) -> URL?,
-                           isPaused: (URL) -> Bool) -> PanelEmptyState {
-        let accounts = Set(tasks.filter { $0.enabled }.compactMap { accountDir($0) })
-        if accounts.isEmpty { return .noSchedules }
-        return accounts.allSatisfy(isPaused) ? .allPaused : .waiting
+                           isPaused: (URL) -> Bool,
+                           isQuotaUnavailable: (URL) -> Bool = { _ in false },
+                           needsAttention: (URL) -> Bool = { _ in false })
+        -> PanelEmptyState {
+        let enabled = tasks.filter { $0.enabled }
+        if enabled.isEmpty { return .noSchedules }
+        if enabled.contains(where: { $0.resolvedCommand.kind == .shell }) { return .waiting }
+        let accounts = Set(enabled.compactMap { accountDir($0) })
+        if accounts.isEmpty { return .waiting }
+        if accounts.allSatisfy(isPaused) { return .allPaused }
+        let continuousAccounts = Set(
+            enabled
+                .filter { $0.repetition == .continuous }
+                .compactMap(accountDir)
+        )
+        if continuousAccounts.contains(
+            where: { !isPaused($0) && isQuotaUnavailable($0) }
+        ) {
+            return .quotaUnavailable
+        }
+        if continuousAccounts.contains(
+            where: { !isPaused($0) && needsAttention($0) }
+        ) {
+            return .needsAttention
+        }
+        return .waiting
     }
 }

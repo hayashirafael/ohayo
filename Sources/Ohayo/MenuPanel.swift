@@ -16,6 +16,12 @@ struct MenuPanel: View {
             tasks: state.tasks,
             nextRenewals: state.nextRenewals, nextTaskFires: state.nextTaskFires,
             isPaused: { state.isPaused($0) },
+            isQuotaUnavailable: {
+                state.quotaUnavailableReasons[$0.standardizedFileURL] != nil
+            },
+            needsAttention: {
+                state.renewalNeedsAttention.contains($0.standardizedFileURL)
+            },
             accountDir: { state.accountDir(for: $0) },
             now: Date(), limit: state.panelUpcomingCount,
             renewalFallbackName: strings.renewalFallbackName)
@@ -88,9 +94,17 @@ struct MenuPanel: View {
         switch MenuPanelLogic.emptyState(
             tasks: state.tasks,
             accountDir: { state.accountDir(for: $0) },
-            isPaused: { state.isPaused($0) }) {
+            isPaused: { state.isPaused($0) },
+            isQuotaUnavailable: {
+                state.quotaUnavailableReasons[$0.standardizedFileURL] != nil
+            },
+            needsAttention: {
+                state.renewalNeedsAttention.contains($0.standardizedFileURL)
+            }) {
         case .noSchedules: return strings.noActiveSchedules
         case .allPaused: return strings.allAccountsPaused
+        case .quotaUnavailable: return strings.quotaUnavailable
+        case .needsAttention: return strings.needsAttention
         case .waiting: return strings.waitingForWindow
         }
     }
@@ -102,9 +116,9 @@ struct MenuPanel: View {
         } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
-                    ProviderIcon(provider: state.provider(for: event.account), size: 16)
+                    eventIcon(event, size: 16)
                         .frame(width: 20, height: 20)
-                    Text(state.label(for: event.account))
+                    Text(event.account.map { state.label(for: $0) } ?? strings.command)
                         .font(.system(size: 13, weight: .semibold))
                         .lineLimit(1)
                     Spacer()
@@ -137,8 +151,8 @@ struct MenuPanel: View {
             open(.horarios, filter: event.account)
         } label: {
             HStack(spacing: 6) {
-                ProviderIcon(provider: state.provider(for: event.account), size: 12)
-                Text("\(state.label(for: event.account)) · \(event.name)")
+                eventIcon(event, size: 12)
+                Text("\(event.account.map { state.label(for: $0) } ?? strings.command) · \(event.name)")
                     .font(.system(size: 11.5))
                     .lineLimit(1)
                 Spacer()
@@ -155,6 +169,17 @@ struct MenuPanel: View {
         .buttonStyle(.plain)
         .help(strings.accountTasks)
         .onHover { hovered = $0 ? event.taskUID : nil }
+    }
+
+    @ViewBuilder
+    private func eventIcon(_ event: MenuPanelLogic.UpcomingEvent, size: CGFloat) -> some View {
+        if let account = event.account {
+            ProviderIcon(provider: state.provider(for: account), size: size)
+        } else {
+            Image(systemName: "terminal")
+                .font(.system(size: size))
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: - Rodapé (Tarefas · Histórico · Ajustes)

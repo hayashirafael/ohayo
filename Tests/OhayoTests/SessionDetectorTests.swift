@@ -10,6 +10,18 @@ final class SessionDetectorTests: XCTestCase {
         ISO8601DateFormatter().date(from: iso)!
     }
 
+    func claudeUsageLine(timestamp: String) -> String {
+        """
+        {"type":"assistant","timestamp":"\(timestamp)","message":{"model":"claude-sonnet","usage":{"input_tokens":1,"output_tokens":1}}}
+        """
+    }
+
+    func codexUsageLine(timestamp: String) -> String {
+        """
+        {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"last_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}}
+        """
+    }
+
     // Algoritmo puro de blocos
 
     func testSemMensagensNaoHaJanela() {
@@ -55,6 +67,30 @@ final class SessionDetectorTests: XCTestCase {
 
     // Integração: varredura de diretório com fixtures
 
+    func testEvidenciaClaudeValidaRetornaJanelaAtivaTipada() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-test-\(UUID().uuidString)")
+        let projetos = conta.appendingPathComponent("projects/projeto")
+        try fm.createDirectory(at: projetos, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
+        let inicio = hoursAgo(1)
+        try claudeUsageLine(timestamp: ISO8601DateFormatter().string(from: inicio))
+            .write(
+                to: projetos.appendingPathComponent("sessao.jsonl"),
+                atomically: true,
+                encoding: .utf8
+            )
+
+        let state = await SessionDetector(clock: FakeClock(now: now))
+            .quotaWindowState(account: conta)
+
+        XCTAssertEqual(
+            state,
+            .active(until: inicio.addingTimeInterval(5 * 3600))
+        )
+    }
+
     func testVarreduraDetectaJanelaAtivaEIgnoraArquivoAntigo() async throws {
         let fm = FileManager.default
         let conta = fm.temporaryDirectory.appendingPathComponent("ohayo-test-\(UUID().uuidString)")
@@ -63,12 +99,13 @@ final class SessionDetectorTests: XCTestCase {
 
         let iso = ISO8601DateFormatter()
         let recent = iso.string(from: Date().addingTimeInterval(-1800))
-        try "{\"type\":\"user\",\"timestamp\":\"\(recent)\"}\n"
+        try "\(claudeUsageLine(timestamp: recent))\n"
             .write(to: proj.appendingPathComponent("sessao.jsonl"), atomically: true, encoding: .utf8)
 
         // Arquivo com mtime antigo deve ser ignorado sem ser lido
         let oldFile = proj.appendingPathComponent("antiga.jsonl")
-        try "{\"type\":\"user\",\"timestamp\":\"\(recent)\"}\n".write(to: oldFile, atomically: true, encoding: .utf8)
+        try "\(claudeUsageLine(timestamp: recent))\n"
+            .write(to: oldFile, atomically: true, encoding: .utf8)
         try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-48 * 3600)], ofItemAtPath: oldFile.path)
 
         let detector = SessionDetector(clock: SystemClock())
@@ -82,6 +119,123 @@ final class SessionDetectorTests: XCTestCase {
         let end = await detector.activeWindowEnd(
             account: URL(fileURLWithPath: "/nao/existe/\(UUID().uuidString)"))
         XCTAssertNil(end)
+    }
+
+    func testClaudeErroSinteticoEUsoZeroNaoAbremJanela() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory.appendingPathComponent("ohayo-test-\(UUID().uuidString)")
+        let proj = conta.appendingPathComponent("projects/proj-a")
+        try fm.createDirectory(at: proj, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
+
+        let timestamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-60))
+        let transcript = """
+        {"type":"user","timestamp":"\(timestamp)","message":{"role":"user","content":"ping"}}
+        {"type":"assistant","timestamp":"\(timestamp)","isApiErrorMessage":true,"message":{"model":"claude-sonnet","usage":{"input_tokens":10,"output_tokens":1}}}
+        {"type":"assistant","timestamp":"\(timestamp)","message":{"model":"<synthetic>","usage":{"input_tokens":10,"output_tokens":1}}}
+        {"type":"assistant","timestamp":"\(timestamp)","message":{"model":"claude-sonnet","usage":{"input_tokens":0,"output_tokens":0}}}
+        """
+        try transcript.write(
+            to: proj.appendingPathComponent("erro.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let state = await SessionDetector().quotaWindowState(account: conta)
+        XCTAssertEqual(state, .inactive)
+    }
+
+    func testSchemaDeUsageClaudeDesconhecidoFicaIndisponivel() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-test-\(UUID().uuidString)")
+        let projetos = conta.appendingPathComponent("projects/projeto")
+        try fm.createDirectory(at: projetos, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        try """
+        {"type":"assistant","timestamp":"\(timestamp)","message":{"model":"claude-sonnet","usage":{"input":1,"output":1}}}
+        """.write(
+            to: projetos.appendingPathComponent("schema-novo.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let state = await SessionDetector().quotaWindowState(account: conta)
+
+        XCTAssertEqual(
+            state,
+            .unavailable(reason: "unsupported Claude usage schema")
+        )
+    }
+
+    func testEnvelopeAssistantClaudeDesconhecidoFicaIndisponivel() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-test-\(UUID().uuidString)")
+        let projetos = conta.appendingPathComponent("projects/projeto")
+        try fm.createDirectory(at: projetos, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        try """
+        {"type":"assistant","timestamp":"\(timestamp)","message_v2":{"model":"claude-sonnet","usage":{"input_tokens":1}}}
+        """.write(
+            to: projetos.appendingPathComponent("envelope-novo.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let state = await SessionDetector().quotaWindowState(
+            account: conta,
+            provider: .claude
+        )
+
+        XCTAssertEqual(
+            state,
+            .unavailable(reason: "unsupported Claude assistant schema")
+        )
+    }
+
+    func testCaminhoDaContaQueNaoEhDiretorioFicaIndisponivel() async throws {
+        let conta = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohayo-account-file-\(UUID().uuidString)")
+        try "not a directory".write(
+            to: conta,
+            atomically: true,
+            encoding: .utf8
+        )
+        defer { try? FileManager.default.removeItem(at: conta) }
+
+        let state = await SessionDetector().quotaWindowState(
+            account: conta,
+            provider: .claude
+        )
+
+        XCTAssertEqual(
+            state,
+            .unavailable(reason: "account path is not a directory")
+        )
+    }
+
+    func testClaudeUsaTimestampRaizDaEvidenciaDeConsumo() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory.appendingPathComponent("ohayo-test-\(UUID().uuidString)")
+        let proj = conta.appendingPathComponent("projects/proj-a")
+        try fm.createDirectory(at: proj, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
+
+        let recent = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-60))
+        let transcript = """
+        {"type":"assistant","message":{"model":"claude-sonnet","content":[{"timestamp":"2020-01-01T00:00:00Z"}],"usage":{"input_tokens":10,"output_tokens":1}},"timestamp":"\(recent)"}
+        """
+        try transcript.write(
+            to: proj.appendingPathComponent("consumo.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let end = await SessionDetector().activeWindowEnd(account: conta)
+        XCTAssertNotNil(end)
     }
 
     func testCadeiaContinuaTruncadaPelaJanelaDeVarredura() async throws {
@@ -104,7 +258,7 @@ final class SessionDetectorTests: XCTestCase {
         var t = agora.addingTimeInterval(-30 * 3600)
         while t <= agora {
             todas.append(t)
-            linhas += "{\"type\":\"user\",\"timestamp\":\"\(iso.string(from: t))\"}\n"
+            linhas += "\(claudeUsageLine(timestamp: iso.string(from: t)))\n"
             t = t.addingTimeInterval(600)
         }
         try linhas.write(to: proj.appendingPathComponent("s.jsonl"), atomically: true, encoding: .utf8)
@@ -130,7 +284,7 @@ final class SessionDetectorTests: XCTestCase {
         var linhas = ""
         var t = agora.addingTimeInterval(-8 * 24 * 3600) // 8 dias atrás
         while t <= agora {
-            linhas += "{\"type\":\"user\",\"timestamp\":\"\(iso.string(from: t))\"}\n"
+            linhas += "\(claudeUsageLine(timestamp: iso.string(from: t)))\n"
             t = t.addingTimeInterval(600)
         }
         try linhas.write(to: proj.appendingPathComponent("s.jsonl"), atomically: true, encoding: .utf8)
@@ -143,27 +297,70 @@ final class SessionDetectorTests: XCTestCase {
         XCTAssertGreaterThan(end!, agora)
     }
 
-    func testArquivoIlegivelEIgnoradoSemBloquear() async throws {
+    func testTranscriptIlegivelTornaDeteccaoIndisponivel() async throws {
         let fm = FileManager.default
         let conta = fm.temporaryDirectory.appendingPathComponent("ohayo-test-\(UUID().uuidString)")
         let proj = conta.appendingPathComponent("projects/proj-a")
         try fm.createDirectory(at: proj, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
 
-        // "Transcript" ilegível: um diretório com extensão .jsonl (url.lines lança ao abrir)
+        // "Transcript" ilegível: um diretório com extensão .jsonl.
         try fm.createDirectory(at: proj.appendingPathComponent("quebrado.jsonl"),
                                withIntermediateDirectories: true)
 
-        let detector = SessionDetector(clock: SystemClock())
-        let semJanela = await detector.activeWindowEnd(account: conta)
-        XCTAssertNil(semJanela)
+        let state = await SessionDetector(clock: SystemClock())
+            .quotaWindowState(account: conta)
 
-        // Com um arquivo válido ao lado, o ilegível não impede a detecção
-        let iso = ISO8601DateFormatter()
-        let recente = iso.string(from: Date().addingTimeInterval(-1800))
-        try "{\"type\":\"user\",\"timestamp\":\"\(recente)\"}\n"
-            .write(to: proj.appendingPathComponent("ok.jsonl"), atomically: true, encoding: .utf8)
-        let comJanela = await detector.activeWindowEnd(account: conta)
-        XCTAssertNotNil(comJanela)
+        XCTAssertEqual(
+            state,
+            .unavailable(reason: "transcript file is not readable")
+        )
+    }
+
+    func testCaminhoDeTranscriptsQueNaoEhDiretorioFicaIndisponivel() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-test-\(UUID().uuidString)")
+        try fm.createDirectory(at: conta, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
+        try "not-a-directory".write(
+            to: conta.appendingPathComponent("projects"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let state = await SessionDetector().quotaWindowState(account: conta)
+
+        XCTAssertEqual(
+            state,
+            .unavailable(reason: "transcript path is not a directory")
+        )
+    }
+
+    func testDiretorioDeTranscriptsIlegivelFicaIndisponivel() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory
+            .appendingPathComponent("ohayo-test-\(UUID().uuidString)")
+        let projetos = conta.appendingPathComponent("projects")
+        try fm.createDirectory(at: projetos, withIntermediateDirectories: true)
+        defer {
+            try? fm.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: projetos.path
+            )
+            try? fm.removeItem(at: conta)
+        }
+        try fm.setAttributes(
+            [.posixPermissions: 0o000],
+            ofItemAtPath: projetos.path
+        )
+
+        let state = await SessionDetector().quotaWindowState(account: conta)
+
+        XCTAssertEqual(
+            state,
+            .unavailable(reason: "transcript directory is not readable")
+        )
     }
 
     func testVarreduraParseiaTimestampsComRuidoESemNewlineFinal() async throws {
@@ -178,7 +375,7 @@ final class SessionDetectorTests: XCTestCase {
         let conteudo = """
         {"type":"summary"}
 
-        {"type":"user","timestamp":"\(iso)"}
+        \(claudeUsageLine(timestamp: iso))
         """ // sem '\n' no fim
         try conteudo.write(to: proj.appendingPathComponent("s.jsonl"),
                            atomically: true, encoding: .utf8)
@@ -206,11 +403,114 @@ final class SessionDetectorTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: conta) }
         let agora = Date()
         let iso = ISO8601DateFormatter().string(from: agora.addingTimeInterval(-60))
-        try #"{"timestamp":"\#(iso)","type":"response_item"}"#
+        try codexUsageLine(timestamp: iso)
             .write(to: sessions.appendingPathComponent("rollout-1.jsonl"),
                    atomically: true, encoding: .utf8)
         let detector = SessionDetector()
         let end = await detector.activeWindowEnd(account: conta)
         XCTAssertNotNil(end) // mensagem de 1 min atrás → janela ativa
+    }
+
+    func testProviderExplicitoVenceAssinaturaAmbiguaDaPasta() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory
+            .appendingPathComponent("ambigua-\(UUID().uuidString)")
+        let projects = conta.appendingPathComponent("projects")
+        let sessions = conta.appendingPathComponent("sessions/2026/07/28")
+        try fm.createDirectory(at: projects, withIntermediateDirectories: true)
+        try fm.createDirectory(at: sessions, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
+        XCTAssertEqual(Provider.detect(at: conta), .claude)
+
+        let consumedAt = now.addingTimeInterval(-60)
+        try codexUsageLine(
+            timestamp: ISO8601DateFormatter().string(from: consumedAt)
+        ).write(
+            to: sessions.appendingPathComponent("rollout.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let state = await SessionDetector(clock: FakeClock(now: now))
+            .quotaWindowState(account: conta, provider: .codex)
+
+        XCTAssertEqual(
+            state,
+            .active(
+                until: consumedAt.addingTimeInterval(
+                    SessionDetector.blockDuration
+                )
+            )
+        )
+    }
+
+    func testCodexTokenCountComInfoNuloEhEvidenciaConhecidaSemConsumo() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory
+            .appendingPathComponent(".codex-teste-\(UUID().uuidString)")
+        let sessions = conta.appendingPathComponent("sessions/2026/07/28")
+        try fm.createDirectory(at: sessions, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        try """
+        {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"token_count","info":null}}
+        """.write(
+            to: sessions.appendingPathComponent("sem-consumo.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let state = await SessionDetector().quotaWindowState(account: conta)
+
+        XCTAssertEqual(state, .inactive)
+    }
+
+    func testCodexFalhaDeAutenticacaoSemConsumoNaoAbreJanela() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory
+            .appendingPathComponent(".codex-teste-\(UUID().uuidString)")
+        let sessions = conta.appendingPathComponent("sessions/2026/07/28")
+        try fm.createDirectory(at: sessions, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
+
+        let timestamp = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-60))
+        let transcript = """
+        {"timestamp":"\(timestamp)","type":"session_meta","payload":{"id":"fake"}}
+        {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"task_started"}}
+        {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11},"last_token_usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}}}
+        {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Not logged in"}}
+        """
+        try transcript.write(
+            to: sessions.appendingPathComponent("rollout-falha.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let end = await SessionDetector().activeWindowEnd(account: conta)
+        XCTAssertNil(end)
+    }
+
+    func testSchemaDeUsageCodexDesconhecidoFicaIndisponivel() async throws {
+        let fm = FileManager.default
+        let conta = fm.temporaryDirectory
+            .appendingPathComponent(".codex-teste-\(UUID().uuidString)")
+        let sessions = conta.appendingPathComponent("sessions/2026/07/28")
+        try fm.createDirectory(at: sessions, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: conta) }
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        try """
+        {"timestamp":"\(timestamp)","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input":1,"output":1}}}}
+        """.write(
+            to: sessions.appendingPathComponent("schema-novo.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let state = await SessionDetector().quotaWindowState(account: conta)
+
+        XCTAssertEqual(
+            state,
+            .unavailable(reason: "unsupported Codex usage schema")
+        )
     }
 }

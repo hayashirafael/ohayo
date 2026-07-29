@@ -9,10 +9,18 @@ final class FakeClock: Clock {
 
 final class MockDetector: SessionDetecting {
     var end: Date?
+    var stateOverride: QuotaWindowState?
     var lastAccount: URL?
-    func activeWindowEnd(account: URL) async -> Date? {
+    var lastProvider: Provider?
+    func quotaWindowState(
+        account: URL,
+        provider: Provider
+    ) async -> QuotaWindowState {
         lastAccount = account
-        return end
+        lastProvider = provider
+        if let stateOverride { return stateOverride }
+        guard let end else { return .inactive }
+        return .active(until: end)
     }
 }
 
@@ -111,6 +119,9 @@ final class FireControllerTests: XCTestCase {
 
     override func setUp() async throws {
         state = AppState(defaults: UserDefaults(suiteName: "ohayo-test-\(UUID().uuidString)")!)
+        // A maioria dos testes abaixo cobre o conteúdo detalhado legado. A
+        // privacidade default-off é exercitada separadamente.
+        state.showSensitiveNotificationDetails = true
         detector = MockDetector()
         runner = MockRunner()
         notifier = MockNotifier()
@@ -120,21 +131,87 @@ final class FireControllerTests: XCTestCase {
                                     authenticationChecker: authentication)
     }
 
+    func testRenovacaoComQuotaIndisponivelFalhaFechadoSemDisparar() async {
+        detector.stateOverride = .unavailable(reason: "schema changed")
+
+        let outcome = await controller.fire(
+            message: AppState.defaultMessage,
+            origin: .renewal
+        )
+
+        XCTAssertEqual(outcome, .needsAttention)
+        XCTAssertEqual(runner.calls, 0)
+        XCTAssertEqual(authentication.calls, 0)
+        XCTAssertEqual(
+            state.history.first?.result,
+            .failure(message: state.strings.quotaUnavailableEvent)
+        )
+    }
+
+    func testNotificacoesOcultamPromptRespostaEErroPorPadrao() async {
+        state.showSensitiveNotificationDetails = false
+
+        runner.result = .failure(.failed("token secreto"))
+        await controller.fire(
+            message: Message(text: "prompt secreto", kind: .claude),
+            origin: .scheduled
+        )
+        XCTAssertEqual(notifier.titles, [state.strings.genericNotificationFailureTitle])
+        XCTAssertEqual(notifier.messages, [state.strings.genericNotificationFailureBody])
+
+        notifier.titles.removeAll()
+        notifier.messages.removeAll()
+        runner.result = .success("resposta secreta")
+        await controller.fire(
+            message: Message(
+                text: "prompt secreto", kind: .claude,
+                showResponse: true, runInTerminal: false
+            ),
+            origin: .scheduled
+        )
+        XCTAssertEqual(
+            notifier.responses.first?.messageText,
+            state.strings.genericNotificationResponseTitle
+        )
+        XCTAssertEqual(
+            notifier.responses.first?.response,
+            state.strings.genericNotificationResponseBody
+        )
+
+        notifier.responses.removeAll()
+        await controller.fire(
+            message: Message(
+                text: "prompt secreto", kind: .shell,
+                notifyOnSuccess: true
+            ),
+            origin: .scheduled,
+            taskName: "tarefa secreta"
+        )
+        XCTAssertEqual(
+            notifier.successes.first?.title,
+            state.strings.genericNotificationSuccessTitle
+        )
+        XCTAssertEqual(
+            notifier.successes.first?.body,
+            state.strings.genericNotificationSuccessBody
+        )
+    }
+
     func testRenovacaoComJanelaAtivaPulaSemExecutar() async {
         let end = now.addingTimeInterval(3600)
         detector.end = end
-        await controller.fire(message: AppState.defaultMessage, origin: .renewal)
+        let outcome = await controller.fire(
+            message: AppState.defaultMessage, origin: .renewal)
         XCTAssertEqual(runner.calls, 0)
+        XCTAssertEqual(outcome, .skipped)
         XCTAssertEqual(state.lastEvent, state.makeEvent(
             date: now, result: .skipped(activeUntil: end),
             message: AppState.defaultMessage, origin: .renewal))
     }
 
-    func testFireConcorrenteEhDescartadoPeloGuardEDepoisLibera() async {
-        // Regressão do "silenciador invisível": um segundo disparo enquanto o
-        // primeiro está em andamento é descartado (retorna false, não chama o
-        // runner) — e depois que o primeiro termina o guard libera, então um
-        // novo disparo volta a executar.
+    func testFireConcorrenteDaMesmaContaEsperaENaoEhPerdido() async {
+        // Regressão do "silenciador invisível": um segundo disparo para a
+        // mesma conta deve entrar na fila, nunca ser descartado.
         let gate = SuspendingRunner()
         let controller = FireController(state: state, detector: detector, runner: gate,
                                         notifier: notifier, clock: FakeClock(now: now))
@@ -142,22 +219,42 @@ final class FireControllerTests: XCTestCase {
         async let primeiro = controller.fire(message: AppState.defaultMessage, origin: .scheduled)
         await gate.waitUntilRunning()
 
-        // 2º disparo enquanto o 1º roda: guard isRunning descarta.
-        let segundo = await controller.fire(message: AppState.defaultMessage, origin: .scheduled)
-        XCTAssertFalse(segundo, "segundo disparo deveria ser descartado pelo guard")
-        XCTAssertEqual(gate.calls, 1, "o runner não pode ter sido chamado pelo 2º disparo")
+        // 2º disparo enquanto o 1º roda: permanece pendente na fila.
+        async let segundo = controller.fire(message: AppState.defaultMessage, origin: .scheduled)
+        await Task.yield()
+        XCTAssertEqual(gate.calls, 1, "a mesma conta deve executar serialmente")
 
-        // Libera o 1º; os próximos não suspendem mais.
+        // Libera o 1º; o segundo deve assumir a execução automaticamente.
         gate.suspend = false
         gate.resume()
         let resultadoPrimeiro = await primeiro
-        XCTAssertTrue(resultadoPrimeiro)
-        XCTAssertEqual(gate.calls, 1)
+        let resultadoSegundo = await segundo
+        XCTAssertEqual(resultadoPrimeiro, .completed)
+        XCTAssertEqual(resultadoSegundo, .completed)
+        XCTAssertEqual(gate.calls, 2, "nenhum disparo concorrente pode ser perdido")
+    }
 
-        // 3º disparo após o 1º terminar: isRunning liberado → executa.
-        let terceiro = await controller.fire(message: AppState.defaultMessage, origin: .scheduled)
-        XCTAssertTrue(terceiro)
-        XCTAssertEqual(gate.calls, 2, "após liberar o guard, um novo disparo deve chamar o runner")
+    func testContasDiferentesPodemExecutarEmParalelo() async {
+        let gate = SuspendingRunner()
+        let controller = FireController(state: state, detector: detector, runner: gate,
+                                        notifier: notifier, clock: FakeClock(now: now))
+
+        async let claude = controller.fire(
+            message: AppState.defaultMessage, origin: .scheduled)
+        await gate.waitUntilRunning()
+
+        // O Claude continua suspenso, mas uma conta de outro provider não deve
+        // ficar atrás da fila daquela conta.
+        gate.suspend = false
+        let codex = await controller.fire(
+            message: Message(text: "revise", kind: .codex, runInTerminal: false),
+            origin: .scheduled)
+
+        XCTAssertEqual(codex, .completed)
+        XCTAssertEqual(gate.calls, 2)
+        gate.resume()
+        let claudeResult = await claude
+        XCTAssertEqual(claudeResult, .completed)
     }
 
     func testSucessoRegistraEventoNoHistorico() async {
@@ -185,9 +282,10 @@ final class FireControllerTests: XCTestCase {
         authentication.status = .unauthenticated(log: "Not logged in")
         let message = Message(text: "1+1", kind: .claude, runInTerminal: false)
 
-        await controller.fire(message: message, origin: .agenda)
+        let outcome = await controller.fire(message: message, origin: .agenda)
 
         XCTAssertEqual(runner.calls, 0)
+        XCTAssertEqual(outcome, .needsAttention)
         XCTAssertEqual(state.lastEvent?.response, "Not logged in")
         guard case .failure(let summary) = state.lastEvent?.result else {
             return XCTFail("esperava falha de autenticação")
@@ -227,8 +325,10 @@ final class FireControllerTests: XCTestCase {
 
     func testCliNaoEncontradoMarcaCliFound() async {
         runner.result = .failure(.cliNotFound(.claude))
-        await controller.fire(message: AppState.defaultMessage, origin: .scheduled)
+        let outcome = await controller.fire(
+            message: AppState.defaultMessage, origin: .scheduled)
         XCTAssertEqual(state.cliFound[.claude], false)
+        XCTAssertEqual(outcome, .needsAttention)
     }
 
     /// O controller envia exatamente a mensagem recebida (o chamador resolve).
@@ -248,6 +348,15 @@ final class FireControllerTests: XCTestCase {
         let msg = Message(text: "oi", kind: .claude, configDir: conta.path)
         await controller.fire(message: msg, origin: .renewal)
         XCTAssertEqual(detector.lastAccount?.standardizedFileURL, conta.standardizedFileURL)
+        XCTAssertEqual(detector.lastProvider, .claude)
+    }
+
+    func testPreflightCodexUsaProviderDaMensagem() async {
+        let msg = Message(text: "oi", kind: .codex)
+
+        await controller.fire(message: msg, origin: .renewal)
+
+        XCTAssertEqual(detector.lastProvider, .codex)
     }
 
     /// Comando cru ignora o skip de janela ativa e sempre executa.
@@ -332,12 +441,14 @@ final class FireControllerTests: XCTestCase {
 
     func testErroEstruturadoNaoGanhaDetalhe() async {
         runner.result = .failure(.timeout)
-        await controller.fire(message: Message(text: "1+1", kind: .claude), origin: .manual)
+        let outcome = await controller.fire(
+            message: Message(text: "1+1", kind: .claude), origin: .manual)
 
         guard case .failure(let message) = state.history.first?.result else {
             return XCTFail("esperava falha no histórico")
         }
-        XCTAssertEqual(message, "the command did not respond within 60s")
+        XCTAssertEqual(outcome, .retryableFailure)
+        XCTAssertEqual(message, "the command timed out")
         XCTAssertNil(state.history.first?.response)
     }
 
@@ -349,7 +460,36 @@ final class FireControllerTests: XCTestCase {
         guard case .failure(let message) = state.history.first?.result else {
             return XCTFail("esperava falha no histórico")
         }
-        XCTAssertEqual(message, "o comando não respondeu em 60s")
+        XCTAssertEqual(message, "o comando excedeu o tempo limite")
+    }
+
+    func testFalhasTransitoriasConhecidasEntramEmRetry() async {
+        for log in [
+            "network connection reset",
+            "HTTP 503 service unavailable",
+            "rate limit exceeded; try again",
+        ] {
+            runner.result = .failure(.failed(log))
+            let outcome = await controller.fire(
+                message: Message(text: "1+1", kind: .claude),
+                origin: .scheduled
+            )
+            XCTAssertEqual(outcome, .retryableFailure, log)
+        }
+    }
+
+    func testFalhaDeModeloOuDesconhecidaExigeAtencaoSemLoop() async {
+        for log in [
+            "The model is not supported for this account",
+            "exit 2",
+        ] {
+            runner.result = .failure(.failed(log))
+            let outcome = await controller.fire(
+                message: Message(text: "1+1", kind: .claude),
+                origin: .scheduled
+            )
+            XCTAssertEqual(outcome, .needsAttention, log)
+        }
     }
 
     func testClaudeComTerminalInterativoAbreTerminalENaoChamaRunnerBatch() async {
@@ -365,7 +505,7 @@ final class FireControllerTests: XCTestCase {
         XCTAssertEqual(terminal.lastMessage, Message(text: "bom dia", kind: .claude))
         XCTAssertEqual(runner.calls, 0)
         XCTAssertEqual(state.lastEvent, state.makeEvent(
-            date: now, result: .success, message: message, origin: .scheduled))
+            date: now, result: .launched, message: message, origin: .scheduled))
     }
 
     func testTerminalInterativoAbreMesmoComJanelaAtiva() async {
@@ -382,7 +522,7 @@ final class FireControllerTests: XCTestCase {
         XCTAssertEqual(terminal.calls, 1)
         XCTAssertEqual(runner.calls, 0)
         XCTAssertEqual(state.lastEvent, state.makeEvent(
-            date: now, result: .success, message: message, origin: .agenda))
+            date: now, result: .launched, message: message, origin: .agenda))
     }
 
     func testAgendaBatchComRespostaExecutaMesmoComJanelaAtiva() async {
@@ -503,7 +643,7 @@ final class FireControllerTests: XCTestCase {
         XCTAssertEqual(notifier.successes.count, 1)
     }
 
-    func testNotifyOnSuccessNoTerminalNotificaAposAbrir() async {
+    func testNotifyOnSuccessNoTerminalNaoConfirmaAntesDaConclusao() async {
         let terminal = MockTerminalLauncher()
         controller = FireController(state: state, detector: detector, runner: runner,
                                     terminalLauncher: terminal,
@@ -511,8 +651,8 @@ final class FireControllerTests: XCTestCase {
         let msg = Message(text: "bom dia", kind: .claude, notifyOnSuccess: true)
         await controller.fire(message: msg, origin: .agenda, taskName: "Interativa")
         XCTAssertEqual(terminal.calls, 1)
-        XCTAssertEqual(notifier.successes.first?.title, "Ohayo: Interativa")
-        XCTAssertEqual(notifier.successes.first?.body, corpoDeSucesso(para: msg))
+        XCTAssertTrue(notifier.successes.isEmpty)
+        XCTAssertEqual(state.lastEvent?.result, .launched)
     }
 
     func testNotifyOnSuccessNoTerminalNaoNotificaEmFalha() async {
@@ -543,9 +683,10 @@ final class FireControllerTests: XCTestCase {
                                     notifier: notifier, clock: FakeClock(now: now))
 
         let message = Message(text: "bom dia", kind: .claude)
-        await controller.fire(message: message, origin: .scheduled)
+        let outcome = await controller.fire(message: message, origin: .scheduled)
 
         XCTAssertEqual(runner.calls, 0)
+        XCTAssertEqual(outcome, .needsAttention)
         XCTAssertEqual(state.lastEvent, state.makeEvent(
             date: now, result: .failure(message: "Terminal nao abriu"),
             message: message, origin: .scheduled))
@@ -556,8 +697,9 @@ final class FireControllerTests: XCTestCase {
 
     func testContaPausadaDescartaSemExecutarNemRegistrar() async {
         state.setPaused(AppState.defaultConfigDir, true)
-        let didRun = await controller.fire(message: AppState.defaultMessage, origin: .renewal)
-        XCTAssertTrue(didRun) // true = engines não entram em pendingRetry
+        let outcome = await controller.fire(
+            message: AppState.defaultMessage, origin: .renewal)
+        XCTAssertEqual(outcome, .paused)
         XCTAssertEqual(runner.calls, 0)
         XCTAssertTrue(state.history.isEmpty)
         XCTAssertTrue(notifier.messages.isEmpty)

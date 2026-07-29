@@ -4,12 +4,18 @@ import SwiftUI
 struct PermissionSetupView: View {
     @ObservedObject var state: AppState
     @StateObject private var model: PermissionSetupModel
+    @StateObject private var doctorModel: ProviderDoctorModel
     @Environment(\.dismiss) private var dismiss
     private var strings: L10n { state.strings }
 
-    init(state: AppState, model: PermissionSetupModel? = nil) {
+    init(
+        state: AppState,
+        model: PermissionSetupModel? = nil,
+        doctorModel: ProviderDoctorModel? = nil
+    ) {
         self.state = state
         _model = StateObject(wrappedValue: model ?? PermissionSetupModel())
+        _doctorModel = StateObject(wrappedValue: doctorModel ?? ProviderDoctorModel())
     }
 
     var body: some View {
@@ -17,17 +23,26 @@ struct PermissionSetupView: View {
             Text(strings.permissionGuideTitle).font(.title2).bold()
             Text(strings.permissionGuideIntro).foregroundStyle(.secondary)
             Form {
+                Section(strings.providerDoctorTitle) {
+                    ProviderDoctorView(
+                        model: doctorModel,
+                        accounts: doctorAccounts,
+                        strings: strings
+                    )
+                }
                 permissionRow(
                     title: strings.notificationsPermissionTitle,
                     body: strings.notificationsPermissionBody,
                     status: model.notificationStatus,
-                    actionTitle: strings.allowNotifications
+                    actionTitle: strings.allowNotifications,
+                    settingsDestination: .notifications
                 ) { Task { await model.requestNotifications() } }
                 permissionRow(
                     title: strings.terminalAutomationTitle,
                     body: strings.terminalAutomationBody,
                     status: model.terminalStatus,
-                    actionTitle: strings.testTerminal
+                    actionTitle: strings.testTerminal,
+                    settingsDestination: .terminalAutomation
                 ) { Task { await model.testTerminal() } }
                 if model.loginItemSupported {
                     Toggle(strings.launchAtLogin, isOn: Binding(
@@ -44,9 +59,25 @@ struct PermissionSetupView: View {
             }
         }
         .padding(20)
-        .frame(width: 520, height: 460)
+        .frame(width: 600, height: 640)
         .task { await model.refresh() }
         .onDisappear { state.dismissPermissionGuide() }
+    }
+
+    private var doctorAccounts: [ProviderDoctorAccount] {
+        Provider.allCases.flatMap { provider in
+            ProviderDoctorAccounts.configured(
+                provider: provider,
+                discoveredAccounts: state.accounts(for: provider),
+                providerInUse: state.tasks.contains {
+                    switch ($0.resolvedCommand.kind, provider) {
+                    case (.claude, .claude), (.codex, .codex): return true
+                    default: return false
+                    }
+                },
+                label: { state.label(for: $0) }
+            )
+        }
     }
 
     private func closeGuide() {
@@ -56,7 +87,9 @@ struct PermissionSetupView: View {
 
     private func permissionRow(
         title: String, body: String, status: PermissionAccessStatus,
-        actionTitle: String, action: @escaping () -> Void
+        actionTitle: String,
+        settingsDestination: PermissionSettingsDestination,
+        action: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -65,8 +98,14 @@ struct PermissionSetupView: View {
                 Text(strings.permissionStatus(status)).foregroundStyle(.secondary)
             }
             Text(body).font(.callout).foregroundStyle(.secondary)
-            Button(actionTitle, action: action)
-                .disabled(!status.allowsRequest)
+            if status == .denied {
+                Button(strings.openSystemSettings) {
+                    model.openSettings(settingsDestination)
+                }
+            } else {
+                Button(actionTitle, action: action)
+                    .disabled(!status.allowsRequest)
+            }
         }
         .padding(.vertical, 4)
     }

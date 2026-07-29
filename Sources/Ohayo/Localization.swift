@@ -58,6 +58,72 @@ struct L10n {
         text(en: "Choose which system integrations you want to configure now.",
              pt: "Escolha quais integrações do sistema deseja configurar agora.")
     }
+    var providerDoctorTitle: String {
+        text(en: "Claude & Codex readiness", pt: "Prontidão do Claude e Codex")
+    }
+    var providerDoctorIntro: String {
+        text(
+            en: "Checks only CLI installation and login status. It never runs a prompt, consumes quota, or signs in.",
+            pt: "Verifica apenas a instalação das CLIs e o status de login. Nunca executa prompt, consome cota ou faz login."
+        )
+    }
+    var providerDoctorRefresh: String {
+        text(en: "Refresh checks", pt: "Atualizar verificações")
+    }
+    var providerDoctorChecking: String {
+        text(en: "Checking…", pt: "Verificando…")
+    }
+    var providerDoctorOptional: String {
+        text(en: "Optional · not configured", pt: "Opcional · não configurado")
+    }
+    var providerDoctorCLIAvailable: String {
+        text(en: "CLI installed", pt: "CLI instalada")
+    }
+    var providerDoctorCLIMissing: String {
+        text(en: "CLI not found", pt: "CLI não encontrada")
+    }
+    var providerDoctorNativeAccount: String {
+        text(en: "Native account", pt: "Conta nativa")
+    }
+    var providerDoctorCustomAccount: String {
+        text(en: "Custom account", pt: "Conta customizada")
+    }
+    var providerDoctorAuthenticated: String {
+        text(en: "Logged in", pt: "Logada")
+    }
+    var providerDoctorUnauthenticated: String {
+        text(en: "Logged out", pt: "Deslogada")
+    }
+    var providerDoctorAuthUnknown: String {
+        text(en: "Login status unknown", pt: "Status de login desconhecido")
+    }
+    var providerDoctorAuthNotChecked: String {
+        text(en: "Not checked", pt: "Não verificado")
+    }
+    func providerDoctorInstallGuidance(_ provider: Provider) -> String {
+        text(
+            en: "Install the official \(provider.displayName) CLI, then refresh.",
+            pt: "Instale a CLI oficial do \(provider.displayName) e atualize a verificação."
+        )
+    }
+    func providerDoctorOptionalGuidance(_ provider: Provider) -> String {
+        text(
+            en: "To start using \(provider.displayName), sign in with:",
+            pt: "Para começar a usar o \(provider.displayName), faça login com:"
+        )
+    }
+    var providerDoctorLoginGuidance: String {
+        text(
+            en: "Sign in from Terminal, then refresh:",
+            pt: "Faça login pelo Terminal e atualize a verificação:"
+        )
+    }
+    var providerDoctorUnknownGuidance: String {
+        text(
+            en: "Ohayo could not verify this login. If needed, sign in again:",
+            pt: "O Ohayo não conseguiu verificar este login. Se necessário, faça login novamente:"
+        )
+    }
     var notificationsPermissionTitle: String { text(en: "Notifications", pt: "Notificações") }
     var notificationsPermissionBody: String {
         text(en: "Receive run results and failure alerts.",
@@ -70,6 +136,9 @@ struct L10n {
              pt: "Permita que o Ohayo abra as sessões interativas que você iniciar.")
     }
     var testTerminal: String { text(en: "Test Terminal", pt: "Testar Terminal") }
+    var openSystemSettings: String {
+        text(en: "Open System Settings", pt: "Abrir Ajustes do Sistema")
+    }
     var configureLater: String { text(en: "Configure Later", pt: "Configurar depois") }
     var permissionsSettingsButton: String { text(en: "Permissions…", pt: "Permissões…") }
     var optional: String { text(en: "Optional", pt: "Opcional") }
@@ -117,8 +186,8 @@ struct L10n {
     }
 
     var commandTimeout: String {
-        text(en: "the command did not respond within 60s",
-             pt: "o comando não respondeu em 60s")
+        text(en: "the command timed out",
+             pt: "o comando excedeu o tempo limite")
     }
 
     var accountFolderMissing: String {
@@ -222,8 +291,18 @@ struct L10n {
     var continuous: String { text(en: "continuous", pt: "contínua") }
     var continuousBadge: String { text(en: "Continuous", pt: "Contínua") }
     var fixedContinuousDescription: String {
-        text(en: "Renews at the end of each account 5h window, 24/7.",
-             pt: "Renova ao fim de cada janela de 5h da conta, 24/7.")
+        text(en: "Renews at the end of each detected 5h account window.",
+             pt: "Renova ao fim de cada janela de 5h detectada na conta.")
+    }
+    var bootstrapWhenInactive: String {
+        text(en: "Try to start when no active window is detected",
+             pt: "Tentar iniciar quando não houver janela ativa")
+    }
+    var bootstrapWhenInactiveHelp: String {
+        text(
+            en: "After saving, Ohayo tries to start this enabled schedule. Terminal sessions may require confirmation; the command can consume provider quota.",
+            pt: "Após salvar, o Ohayo tenta iniciar este agendamento habilitado. Sessões no Terminal podem exigir confirmação; o comando pode consumir cota do provedor."
+        )
     }
     var continuousConflict: String {
         text(en: "This account already has a continuous schedule.",
@@ -256,22 +335,34 @@ struct L10n {
         text(en: "Notify on macOS when this task runs",
              pt: "Notificar no macOS quando esta tarefa for executada")
     }
+    var timeout: String { text(en: "Timeout", pt: "Tempo limite") }
     var runInTerminal: String {
         text(en: "Open in Terminal (interactive)",
              pt: "Abrir no Terminal (interativo)")
     }
     var model: String { text(en: "Model", pt: "Modelo") }
     var effort: String { text(en: "Effort", pt: "Esforço") }
-    var safeMode: String { text(en: "Safe mode", pt: "Modo seguro") }
-    var skillLabel: String { text(en: "Skill", pt: "Skill") }
+    var safeMode: String {
+        text(en: "Ignore Claude customizations (not a sandbox)",
+             pt: "Ignorar customizações do Claude (não é sandbox)")
+    }
+    var skillLabel: String {
+        text(en: "Skill (expands context)", pt: "Skill (amplia o contexto)")
+    }
     var noSkill: String { text(en: "None", pt: "Nenhuma") }
     var skillNotFound: String {
         text(en: "Skill not found in this account", pt: "Skill não encontrada nesta conta")
     }
     var skillDisablesSafeMode: String {
-        text(en: "Skills require safe mode off", pt: "Skills exigem o modo seguro desligado")
+        text(
+            en: "Selecting a skill expands context and requires Claude customizations",
+            pt: "Selecionar uma skill amplia o contexto e exige as customizações do Claude"
+        )
     }
     var reasoning: String { text(en: "Reasoning", pt: "Raciocínio") }
+    var accountDefaultReasoning: String {
+        text(en: "Account default", pt: "Padrão da conta")
+    }
     var account: String { text(en: "Account", pt: "Conta") }
     var globalDefault: String { text(en: "Default (global)", pt: "Padrão (global)") }
     var codexDefault: String { text(en: "Default (~/.codex)", pt: "Padrão (~/.codex)") }
@@ -293,8 +384,26 @@ struct L10n {
     }
 
     var waitingForWindow: String { text(en: "waiting for window", pt: "aguardando janela") }
+    var quotaUnavailable: String {
+        text(en: "quota unavailable", pt: "cota indisponível")
+    }
+    var needsAttention: String {
+        text(en: "needs attention", pt: "requer atenção")
+    }
+    var quotaUnavailableEvent: String {
+        text(
+            en: "Quota could not be verified; no command was sent.",
+            pt: "Não foi possível verificar a cota; nenhum comando foi enviado."
+        )
+    }
     var renewalFallbackName: String { text(en: "renewal", pt: "renovação") }
     func renewsAt(_ time: String) -> String { text(en: "renews \(time)", pt: "renova \(time)") }
+    func retriesAt(_ time: String) -> String {
+        text(en: "retries \(time)", pt: "tenta novamente \(time)")
+    }
+    func mayTryAt(_ time: String) -> String {
+        text(en: "may try \(time)", pt: "pode tentar \(time)")
+    }
     func nextAt(_ time: String) -> String { text(en: "next \(time)", pt: "próxima \(time)") }
 
     var noHistory: String { text(en: "No runs recorded yet.", pt: "Sem disparos registrados ainda.") }
@@ -303,6 +412,7 @@ struct L10n {
              pt: "Os disparos dos seus agendamentos aparecerão aqui com detalhes da conta e do modelo.")
     }
     var historySuccess: String { text(en: "Success", pt: "Sucesso") }
+    var historyLaunched: String { text(en: "Launched", pt: "Iniciado") }
     var historyFailure: String { text(en: "Failed", pt: "Falhou") }
     var historySkipped: String { text(en: "Skipped", pt: "Pulado") }
     var historyMissed: String { text(en: "Missed", pt: "Perdido") }
@@ -312,6 +422,17 @@ struct L10n {
     var historyAccountDefaultModel: String { text(en: "Account default", pt: "Padrão da conta") }
     var historyResponse: String { text(en: "Response", pt: "Resposta") }
     var historyDetails: String { text(en: "Details", pt: "Detalhes") }
+    var clearHistory: String { text(en: "Clear history", pt: "Limpar histórico") }
+    var clearHistoryConfirmationTitle: String {
+        text(en: "Clear all history?", pt: "Limpar todo o histórico?")
+    }
+    var clearHistoryConfirmationBody: String {
+        text(
+            en: "This permanently removes every recorded run.",
+            pt: "Isso remove permanentemente todas as execuções registradas."
+        )
+    }
+    var clearHistoryAction: String { text(en: "Clear", pt: "Limpar") }
     func authenticationRequired(_ provider: Provider, configDir: URL) -> String {
         let escapedPath = configDir.path.replacingOccurrences(of: "'", with: "'\\''")
         let loginCommand: String
@@ -328,6 +449,10 @@ struct L10n {
     }
     var historyExecutedSuccessfully: String {
         text(en: "Executed successfully", pt: "Executado com sucesso")
+    }
+    var historyTerminalLaunched: String {
+        text(en: "Interactive session opened in Terminal",
+             pt: "Sessão interativa aberta no Terminal")
     }
     func historyWindowActive(until: String) -> String {
         text(en: "Active window until \(until)", pt: "Janela ativa até \(until)")
@@ -379,17 +504,54 @@ struct L10n {
         let result = text(en: "ran successfully", pt: "executada com sucesso")
         return [account, time, result].compactMap { $0 }.joined(separator: " · ")
     }
+    var showSensitiveNotificationDetails: String {
+        text(
+            en: "Show sensitive details in notifications",
+            pt: "Mostrar detalhes sensíveis nas notificações"
+        )
+    }
+    var genericNotificationFailureTitle: String {
+        text(en: "Ohayo task failed", pt: "Tarefa do Ohayo falhou")
+    }
+    var genericNotificationFailureBody: String {
+        text(
+            en: "Open History in Ohayo to see the error details.",
+            pt: "Abra o Histórico no Ohayo para ver os detalhes do erro."
+        )
+    }
+    var genericNotificationResponseTitle: String {
+        text(en: "Ohayo response ready", pt: "Resposta do Ohayo pronta")
+    }
+    var genericNotificationResponseBody: String {
+        text(
+            en: "Open History in Ohayo to read the response.",
+            pt: "Abra o Histórico no Ohayo para ler a resposta."
+        )
+    }
+    var genericNotificationSuccessTitle: String {
+        text(en: "Ohayo task completed", pt: "Tarefa do Ohayo concluída")
+    }
+    var genericNotificationSuccessBody: String {
+        text(
+            en: "Open History in Ohayo to see the run details.",
+            pt: "Abra o Histórico no Ohayo para ver os detalhes da execução."
+        )
+    }
 
     func daysSummary(_ weekdays: Set<Int>) -> String {
-        if weekdays == Set(1...7) { return text(en: "every day", pt: "todos os dias") }
-        if weekdays == [2, 3, 4, 5, 6] { return text(en: "Mon to Fri", pt: "seg a sex") }
-        if weekdays == [1, 7] { return text(en: "weekend", pt: "fim de semana") }
+        let validWeekdays = Set(weekdays.filter { (1...7).contains($0) })
+        if validWeekdays.isEmpty {
+            return text(en: "no valid days", pt: "nenhum dia válido")
+        }
+        if validWeekdays == Set(1...7) { return text(en: "every day", pt: "todos os dias") }
+        if validWeekdays == [2, 3, 4, 5, 6] { return text(en: "Mon to Fri", pt: "seg a sex") }
+        if validWeekdays == [1, 7] { return text(en: "weekend", pt: "fim de semana") }
         let names: [String]
         switch language {
         case .english: names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
         case .portuguese: names = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"]
         }
-        return weekdays.sorted().map { names[$0 - 1] }.joined(separator: " · ")
+        return validWeekdays.sorted().map { names[$0 - 1] }.joined(separator: " · ")
     }
 
     var dayLetters: [String] {
@@ -402,6 +564,9 @@ struct L10n {
     /// Nome completo do dia (1 = domingo) — desambigua as letras únicas nos
     /// botões de dia (help/accessibilityLabel).
     func dayName(_ weekday: Int) -> String {
+        guard (1...7).contains(weekday) else {
+            return text(en: "Invalid day", pt: "Dia inválido")
+        }
         let names: [String]
         switch language {
         case .english:
@@ -409,7 +574,7 @@ struct L10n {
         case .portuguese:
             names = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"]
         }
-        return names[(weekday - 1) % 7]
+        return names[weekday - 1]
     }
 
     // Motivos do botão Salvar desabilitado (tooltip do form de agendamento).

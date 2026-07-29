@@ -32,4 +32,9 @@ final class SingleInstanceLockTests: XCTestCase {
         primeira.release()
         XCTAssertTrue(segunda.acquire(path: path))
     }
+
+    func testFalhaDeIOFalhaFechadoParaNaoPermitirDisparosDuplicados() {
+        let lock = SingleInstanceLock()
+        XCTAssertFalse(lock.acquire(path: "/dev/null/ohayo-instance.lock"))
+    }
 }

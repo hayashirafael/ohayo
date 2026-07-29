@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import Ohayo
 
 final class CommandRunnerTests: XCTestCase {
@@ -11,15 +12,19 @@ final class CommandRunnerTests: XCTestCase {
         return url
     }
 
-    /// Trava o comando enviado ao CLI: ping mínimo em tokens
-    /// (Haiku + effort low + safe-mode + prompt "1+1"). O fake script grava
-    /// "$@" e a asserção confere os argumentos exatos, na ordem.
-    func testEnviaComandoMinimoDeTokens() async throws {
+    /// O prompt não pode aparecer em argv (visível em `ps`); Claude `-p` lê o
+    /// conteúdo de stdin quando o argumento posicional é omitido.
+    func testClaudeEnviaPromptPorStdinSemExpoLoNosArgumentos() async throws {
         let argsFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("claude-args-\(UUID().uuidString).txt")
+        let stdinFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-stdin-\(UUID().uuidString).txt")
         let runner = CommandRunner(
             timeout: 5,
-            binaryOverride: makeScript("printf '%s\\n' \"$@\" > '\(argsFile.path)'; exit 0")
+            binaryOverride: makeScript(
+                "printf '%s\\n' \"$@\" > '\(argsFile.path)'; "
+                    + "cat > '\(stdinFile.path)'; exit 0"
+            )
         )
 
         let result = await runner.run(Message(text: "1+1", kind: .claude))
@@ -30,15 +35,21 @@ final class CommandRunnerTests: XCTestCase {
             .filter { !$0.isEmpty }
             .map(String.init)
         XCTAssertEqual(captured,
-                       ["-p", "--model", "claude-haiku-4-5", "--effort", "low", "--safe-mode", "1+1"])
+                       ["-p", "--model", "claude-haiku-4-5", "--effort", "low", "--safe-mode"])
+        XCTAssertEqual(try String(contentsOf: stdinFile, encoding: .utf8), "1+1")
     }
 
     func testRepassaPromptCustomComFlagsFixos() async throws {
         let argsFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("claude-args-\(UUID().uuidString).txt")
+        let stdinFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-stdin-\(UUID().uuidString).txt")
         let runner = CommandRunner(
             timeout: 5,
-            binaryOverride: makeScript("printf '%s\\n' \"$@\" > '\(argsFile.path)'; exit 0")
+            binaryOverride: makeScript(
+                "printf '%s\\n' \"$@\" > '\(argsFile.path)'; "
+                    + "cat > '\(stdinFile.path)'; exit 0"
+            )
         )
 
         let result = await runner.run(Message(text: "bom dia", kind: .claude))
@@ -49,7 +60,8 @@ final class CommandRunnerTests: XCTestCase {
             .filter { !$0.isEmpty }
             .map(String.init)
         XCTAssertEqual(captured,
-                       ["-p", "--model", "claude-haiku-4-5", "--effort", "low", "--safe-mode", "bom dia"])
+                       ["-p", "--model", "claude-haiku-4-5", "--effort", "low", "--safe-mode"])
+        XCTAssertEqual(try String(contentsOf: stdinFile, encoding: .utf8), "bom dia")
     }
 
     /// Config por mensagem: modelo/effort escolhidos entram nos args e
@@ -70,7 +82,7 @@ final class CommandRunnerTests: XCTestCase {
             .filter { !$0.isEmpty }
             .map(String.init)
         XCTAssertEqual(captured,
-                       ["-p", "--model", "claude-opus-4-8", "--effort", "high", "tarefa"])
+                       ["-p", "--model", "claude-opus-4-8", "--effort", "high"])
     }
 
     /// Diretório de trabalho por mensagem: o subprocesso roda no diretório dado.
@@ -135,6 +147,31 @@ final class CommandRunnerTests: XCTestCase {
         XCTAssertEqual(captured, ["-l", "-c", "echo oi"])
     }
 
+    func testShellNaoInjetaAmbienteDeClaudeNemCodex() async throws {
+        let envFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("shell-env-\(UUID().uuidString).txt")
+        let expectedClaude = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] ?? "<unset>"
+        let expectedCodex = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? "<unset>"
+        let runner = CommandRunner(
+            timeout: 5,
+            shellOverride: makeScript(
+                "printf '%s|%s' \"${CLAUDE_CONFIG_DIR-<unset>}\" "
+                    + "\"${CODEX_HOME-<unset>}\" > '\(envFile.path)'; exit 0"
+            ),
+            configDir: URL(fileURLWithPath: "/tmp/nao-deve-vazar")
+        )
+        var message = Message(text: "echo oi", kind: .shell)
+        message.configDir = "/tmp/tambem-nao-deve-vazar"
+
+        let result = await runner.run(message)
+
+        XCTAssertEqual(result, .success(""))
+        XCTAssertEqual(
+            try String(contentsOf: envFile, encoding: .utf8),
+            "\(expectedClaude)|\(expectedCodex)"
+        )
+    }
+
     /// O ping deve mirar a conta escolhida via `CLAUDE_CONFIG_DIR`. O fake
     /// script grava o valor visto no ambiente do filho.
     func testFixaClaudeConfigDirDaConta() async throws {
@@ -153,22 +190,25 @@ final class CommandRunnerTests: XCTestCase {
         XCTAssertEqual(captured, conta.path)
     }
 
-    /// Regressao (bug do "hi na conta errada"): sem conta escolhida, o ping
-    /// deve fixar em ~/.claude — sobrescrevendo qualquer CLAUDE_CONFIG_DIR
-    /// herdado do shell que lancou o app (ex.: uma conta secundaria).
-    func testSobrescreveConfigDirHerdadoParaODefault() async throws {
+    /// A conta Claude nativa não é equivalente a
+    /// `CLAUDE_CONFIG_DIR=~/.claude`: o override faria a CLI procurar a
+    /// identidade em `~/.claude/.claude.json`, em vez de `~/.claude.json`.
+    /// Sem conta custom escolhida, remove qualquer override herdado.
+    func testClaudeNativoRemoveConfigDirHerdadoSemExportarDefault() async throws {
         setenv("CLAUDE_CONFIG_DIR", "/tmp/conta-vazada-do-shell", 1)
         defer { unsetenv("CLAUDE_CONFIG_DIR") }
         let envFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("env-\(UUID().uuidString).txt")
         let runner = CommandRunner( // configDir nil -> default
             timeout: 5,
-            binaryOverride: makeScript("printf '%s' \"$CLAUDE_CONFIG_DIR\" > '\(envFile.path)'; exit 0")
+            binaryOverride: makeScript(
+                "printf '%s' \"${CLAUDE_CONFIG_DIR-<unset>}\" > '\(envFile.path)'; exit 0"
+            )
         )
         let result = await runner.run(Message(text: "1+1", kind: .claude))
         XCTAssertEqual(result, .success(""))
         let captured = try String(contentsOf: envFile, encoding: .utf8)
-        XCTAssertEqual(captured, NSHomeDirectory() + "/.claude")
+        XCTAssertEqual(captured, "<unset>")
     }
 
     func testCapturaStdoutNoSucesso() async {
@@ -218,6 +258,58 @@ final class CommandRunnerTests: XCTestCase {
         let runner = CommandRunner(timeout: 1, binaryOverride: makeScript("sleep 10"))
         let result = await runner.run(Message(text: "1+1", kind: .claude))
         XCTAssertEqual(result, .failure(.timeout))
+    }
+
+    func testTimeoutDaMensagemControlaExecucaoBatchSemOverrideDoRunner() async {
+        let runner = CommandRunner(shellOverride: makeScript("sleep 2; exit 0"))
+        let message = Message(
+            text: "comando demorado",
+            kind: .shell,
+            timeoutSeconds: 1
+        )
+        let start = Date()
+
+        let result = await runner.run(message)
+
+        XCTAssertEqual(result, .failure(.timeout))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2,
+                          "o timeout persistido da mensagem não foi aplicado")
+    }
+
+    func testChamadaDiretaDoRunnerAplicaTimeoutMesmoSeMensagemMarcaTerminal() async {
+        let runner = CommandRunner(binaryOverride: makeScript("sleep 2; exit 0"))
+        let message = Message(
+            text: "comando demorado",
+            kind: .claude,
+            runInTerminal: true,
+            timeoutSeconds: 1
+        )
+        let start = Date()
+
+        let result = await runner.run(message)
+
+        XCTAssertEqual(result, .failure(.timeout))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2,
+                          "CommandRunner deve tratar toda chamada direta como batch")
+    }
+
+    func testTimeoutInjetadoNoRunnerTemPrioridadeSobreTimeoutDaMensagem() async {
+        let runner = CommandRunner(
+            timeout: 0.25,
+            shellOverride: makeScript("sleep 2; exit 0")
+        )
+        let message = Message(
+            text: "comando demorado",
+            kind: .shell,
+            timeoutSeconds: 1_800
+        )
+        let start = Date()
+
+        let result = await runner.run(message)
+
+        XCTAssertEqual(result, .failure(.timeout))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2,
+                          "o override injetado deve manter os testes rápidos")
     }
 
     /// Regressao: se o pipe de stdout nao for drenado enquanto o processo
@@ -272,31 +364,28 @@ final class CommandRunnerTests: XCTestCase {
         }
     }
 
-    /// Regressao (revisao Task 6, achado "Important"): o cap de PipeBuffer
-    /// (256 KiB) corta o Data em um limite de bytes que nao respeita
-    /// fronteiras de caractere UTF-8. Este script emite exatamente
-    /// 262143 'x' seguidos de "á" (2 bytes) e mais texto, de forma que o
-    /// corte de maxBytes (262144 bytes) caia bem no meio da sequencia
-    /// multibyte de "á" — sobra so o primeiro byte dela no buffer. Antes do
-    /// fix, `String(data:encoding:.utf8)` falhava para o Data inteiro e
-    /// `trimmedString()` devolvia "" (perdendo toda a saida valida). Depois
-    /// do fix, o decode deve recuar ate o ultimo prefixo UTF-8 valido e
-    /// devolver os 262143 'x' com sucesso.
-    func testStdoutMaiorQueCapComCaractereMultibyteNoLimiteNaoViraStringVazia() async {
+    /// Quando a saída excede 256 KiB, o diagnóstico precisa manter tanto o
+    /// começo (contexto) quanto a cauda recente (onde CLIs normalmente escrevem
+    /// a causa final), deixando explícito que houve truncamento. A repetição de
+    /// emoji força os dois cortes internos a caírem no meio de sequências UTF-8.
+    func testStdoutMaiorQueCapPreservaInicioECaudaComMarcadorEUTF8Valido() async throws {
+        let outputFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("command-runner-output-\(UUID().uuidString).txt")
+        try (String(repeating: "🚀", count: 70_000) + "FIM-DO-LOG\n")
+            .write(to: outputFile, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: outputFile) }
         let runner = CommandRunner(
             timeout: 10,
-            binaryOverride: makeScript(
-                "head -c 262143 /dev/zero | tr '\\0' 'x'; printf 'á'; printf 'MARCADOR-DEPOIS-DO-CAP'; exit 0"
-            )
+            binaryOverride: makeScript("cat '\(outputFile.path)'; exit 0")
         )
         let result = await runner.run(Message(text: "1+1", kind: .claude))
         if case .success(let output) = result {
-            XCTAssertFalse(output.isEmpty,
-                            "corte no meio de UTF-8 multibyte nao deveria zerar a string inteira")
-            XCTAssertEqual(output.count, 262143,
-                            "esperava os 262143 'x' antes do byte incompleto de 'á'")
-            XCTAssertTrue(output.allSatisfy { $0 == "x" },
-                          "saida deveria conter apenas 'x' (byte incompleto de 'á' descartado)")
+            XCTAssertTrue(output.hasPrefix("🚀"), "o início do log deve ser preservado")
+            XCTAssertTrue(output.contains(PipeBuffer.truncationMarker),
+                          "o truncamento deve ficar explícito")
+            XCTAssertTrue(output.hasSuffix("FIM-DO-LOG"),
+                          "a cauda recente do log deve ser preservada")
+            XCTAssertLessThanOrEqual(Data(output.utf8).count, PipeBuffer.maxBytes)
         } else {
             XCTFail("esperava sucesso, obtido \(result)")
         }
@@ -319,6 +408,49 @@ final class CommandRunnerTests: XCTestCase {
         XCTAssertLessThan(elapsed, 10, "sendHi() nao retornou em tempo limitado: \(elapsed)s")
     }
 
+    /// Foundation não cria um process group isolado para `Process`. No
+    /// timeout, matar apenas o PID raiz deixa subprocessos da CLI órfãos; usar
+    /// `kill(-pid, ...)` sem ter criado o grupo poderia atingir o próprio app.
+    /// O runner deve encerrar apenas descendentes positivamente identificados.
+    func testTimeoutEncerraProcessoFilhoSemMatarGrupoDoApp() async throws {
+        let childPIDFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("command-runner-child-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: childPIDFile) }
+        let runner = CommandRunner(
+            timeout: 0.5,
+            binaryOverride: makeScript(
+                "trap '' TERM; "
+                    + "sh -c 'trap \"\" TERM; while :; do sleep 30; done' & child=$!; "
+                    + "printf '%s' \"$child\" > '\(childPIDFile.path)'; wait \"$child\""
+            )
+        )
+
+        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        XCTAssertEqual(result, .failure(.timeout))
+
+        let childPID = try XCTUnwrap(pid_t(
+            String(contentsOf: childPIDFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
+        defer {
+            if Self.processExists(childPID) {
+                kill(childPID, SIGKILL)
+            }
+        }
+
+        let deadline = Date().addingTimeInterval(2)
+        while Self.processExists(childPID), Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertFalse(Self.processExists(childPID),
+                       "o subprocesso \(childPID) ficou órfão após o timeout")
+    }
+
+    private static func processExists(_ pid: pid_t) -> Bool {
+        errno = 0
+        return kill(pid, 0) == 0 || errno == EPERM
+    }
+
     /// Regressao: o fallback via shell de login (`locateViaShell`) rodava
     /// `waitUntilExit()` sem timeout. Um profile (`~/.zprofile`) que pendura —
     /// pedindo input, esperando rede — travaria a busca para sempre; e como
@@ -332,6 +464,35 @@ final class CommandRunnerTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(start)
         XCTAssertNil(result)
         XCTAssertLessThan(elapsed, 10, "locateViaShell nao respeitou o timeout: \(elapsed)s")
+    }
+
+    /// Fechar o sheet ou trocar de conta cancela também a descoberta do
+    /// binário. Sem isso, o shell de login continuava vivo até o timeout de
+    /// dez segundos mesmo depois de a resposta já não poder atualizar a UI.
+    func testLocateViaShellCancelaBuscaEmAndamento() {
+        let shellQuePendura = makeScript("sleep 30")
+        let cancellation = DispatchSemaphore(value: 0)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
+            cancellation.signal()
+        }
+
+        let start = Date()
+        let result = CommandRunner.locateViaShell(
+            shell: shellQuePendura,
+            cliName: "codex",
+            timeout: 10,
+            isCancelled: {
+                cancellation.wait(timeout: .now()) == .success
+            }
+        )
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertNil(result)
+        XCTAssertLessThan(
+            elapsed,
+            3,
+            "cancelamento não interrompeu a busca: \(elapsed)s"
+        )
     }
 
     /// Regressao: `locateViaShell` nunca lia o pipe de stderr. Um profile que
@@ -386,8 +547,32 @@ final class CommandRunnerTests: XCTestCase {
         XCTAssertTrue(output.contains("--skip-git-repo-check"))
         XCTAssertTrue(output.contains("--color never"))
         XCTAssertTrue(output.contains(#"model_reasoning_effort="low""#))
-        XCTAssertTrue(output.contains("1+1"))
+        XCTAssertFalse(output.contains("1+1"))
         XCTAssertTrue(output.contains("HOME_CODEX:/tmp/conta-codex"))
+    }
+
+    func testCodexEnviaPromptPorStdinSemExpoLoNosArgumentos() async throws {
+        let argsFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-args-\(UUID().uuidString).txt")
+        let stdinFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-stdin-\(UUID().uuidString).txt")
+        let runner = CommandRunner(
+            timeout: 5,
+            binaryOverride: makeScript(
+                "printf '%s\\n' \"$@\" > '\(argsFile.path)'; "
+                    + "cat > '\(stdinFile.path)'; exit 0"
+            )
+        )
+
+        let result = await runner.run(Message(text: "segredo codex", kind: .codex))
+
+        XCTAssertEqual(result, .success(""))
+        let args = try String(contentsOf: argsFile, encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        XCTAssertEqual(args, ["exec", "--sandbox", "read-only",
+                              "--skip-git-repo-check", "--color", "never"])
+        XCTAssertEqual(try String(contentsOf: stdinFile, encoding: .utf8), "segredo codex")
     }
 
     /// Sem modelo/reasoning explícitos, o Codex omite `--model` e o `-c
@@ -407,7 +592,7 @@ final class CommandRunnerTests: XCTestCase {
             .filter { !$0.isEmpty }
             .map(String.init)
         XCTAssertEqual(args, ["exec", "--sandbox", "read-only",
-                              "--skip-git-repo-check", "--color", "never", "1+1"])
+                              "--skip-git-repo-check", "--color", "never"])
     }
 
     func testCodexComModeloEReasoningExplicitos() async throws {
@@ -427,7 +612,7 @@ final class CommandRunnerTests: XCTestCase {
             .map(String.init)
         XCTAssertEqual(args, ["exec", "--model", "gpt-5.5", "--sandbox", "read-only",
                               "--skip-git-repo-check", "--color", "never",
-                              "-c", "model_reasoning_effort=\"high\"", "1+1"])
+                              "-c", "model_reasoning_effort=\"high\""])
     }
 
     /// Sem `configDir` na mensagem, o Codex mira `~/.codex` (paridade com o
@@ -445,9 +630,14 @@ final class CommandRunnerTests: XCTestCase {
     func testClaudeComSkillPrefixaPromptEOmiteSafeMode() async throws {
         let argsFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("claude-args-\(UUID().uuidString).txt")
+        let stdinFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-stdin-\(UUID().uuidString).txt")
         let runner = CommandRunner(
             timeout: 5,
-            binaryOverride: makeScript("printf '%s\\n' \"$@\" > '\(argsFile.path)'; exit 0")
+            binaryOverride: makeScript(
+                "printf '%s\\n' \"$@\" > '\(argsFile.path)'; "
+                    + "cat > '\(stdinFile.path)'; exit 0"
+            )
         )
         var msg = Message(text: "1+1", kind: .claude)
         msg.skill = "gmud"
@@ -459,15 +649,21 @@ final class CommandRunnerTests: XCTestCase {
             .filter { !$0.isEmpty }
             .map(String.init)
         XCTAssertEqual(captured,
-                       ["-p", "--model", "claude-haiku-4-5", "--effort", "low", "/gmud 1+1"])
+                       ["-p", "--model", "claude-haiku-4-5", "--effort", "low"])
+        XCTAssertEqual(try String(contentsOf: stdinFile, encoding: .utf8), "/gmud 1+1")
     }
 
     func testCodexComSkillPrefixaPromptComCifrao() async throws {
         let argsFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-args-\(UUID().uuidString).txt")
+        let stdinFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-stdin-\(UUID().uuidString).txt")
         let runner = CommandRunner(
             timeout: 5,
-            binaryOverride: makeScript("printf '%s\\n' \"$@\" > '\(argsFile.path)'; exit 0")
+            binaryOverride: makeScript(
+                "printf '%s\\n' \"$@\" > '\(argsFile.path)'; "
+                    + "cat > '\(stdinFile.path)'; exit 0"
+            )
         )
         var msg = Message(text: "oi", kind: .codex)
         msg.skill = "gmud"
@@ -480,7 +676,8 @@ final class CommandRunnerTests: XCTestCase {
             .map(String.init)
         XCTAssertEqual(captured,
                        ["exec", "--sandbox", "read-only", "--skip-git-repo-check",
-                        "--color", "never", "$gmud oi"])
+                        "--color", "never"])
+        XCTAssertEqual(try String(contentsOf: stdinFile, encoding: .utf8), "$gmud oi")
     }
 }
 

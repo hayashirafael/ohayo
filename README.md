@@ -19,7 +19,8 @@ Code transcripts, making no network calls of its own.
 
 - **Unified schedules** — one concept for everything scheduled. Each
   schedule carries an embedded command and a repetition: **Continuous**
-  (chains 5-hour windows 24/7) or **Fixed times**
+  (chains 5-hour windows, with an explicit opt-in before starting without
+  active-window evidence) or **Fixed times**
   (times × weekdays). Managed in the **Schedules** section
 - **Configurable commands** — a Claude prompt (model, effort, safe-mode,
   working directory), a Codex prompt (model, reasoning effort, working
@@ -32,16 +33,24 @@ Code transcripts, making no network calls of its own.
   anytime via "Add account…" — shows the logged-in email, supports custom
   aliases
 - **History** — recent dispatches with status and expandable response (the
-  captured stdout/stderr log on failures); optional macOS notifications on failures and
-  responses, plus opt-in success notifications per schedule
+  captured stdout/stderr log on failures), including a distinct **Launched**
+  state for interactive Terminal sessions; clear it at any time
+- **Private notifications by default** — macOS notifications hide prompt,
+  response, error and account details unless you explicitly enable them in
+  **General**
+- **Provider Doctor** — first-run, read-only checks for CLI installation and
+  login status for every configured Claude/Codex account; it never runs a
+  prompt or consumes quota
 - **Language** — English by default, with a Portuguese option in Settings
 - Per-account **Pause/Resume**, in **Accounts**, and optional **Launch at
   Login**
 
 ## Requirements
 
-- macOS 13+
+- macOS 13+ (the currently published v1.1.1 binary requires Apple Silicon;
+  the next release produced by this revision is universal)
 - [Claude Code](https://claude.com/claude-code) installed and logged in
+  (only if you use Claude tasks)
 - [Codex CLI](https://github.com/openai/codex) installed and logged in
   (optional, only for Codex accounts/commands)
 - To build from source: Swift 5.9+ (Xcode or Command Line Tools)
@@ -71,10 +80,13 @@ Download `Ohayo-<version>.dmg` from the
 [latest release](../../releases/latest) and drag **Ohayo** onto
 **Applications**.
 
-> Ohayo is ad-hoc signed, not notarized. On first launch, Gatekeeper may
-> block it: use **System Settings → Privacy & Security → Open Anyway**, or
-> clear the quarantine flag with
-> `xattr -dr com.apple.quarantine /Applications/Ohayo.app`.
+> The currently published v1.1.1 artifact supports Apple Silicon only. It is
+> also ad-hoc signed and not notarized, so Gatekeeper may require **System
+> Settings → Privacy & Security → Open Anyway**. The release workflow in this
+> revision is fail-closed: future public artifacts require Developer ID
+> signing, hardened runtime, notarization and stapling before they can be
+> published, and are built universal for Apple Silicon and Intel. Builds made
+> locally without a signing identity remain ad-hoc.
 
 ### From source
 
@@ -118,23 +130,32 @@ missing, plus **Quit**.
   the menu panel filters this list to that account, with a chip to clear the
   filter
 - **Skill (optional):** for Claude/Codex tasks, pick a skill installed in the
-  target account (`skills/` folder; for Claude, plugin skills too, as
-  `plugin:skill`). The dispatch prefixes it to the prompt (`/skill message` for
-  Claude, `$skill message` for Codex). Selecting a skill turns safe mode off:
-  `--safe-mode` would skip skills
+  target account, user scope, or selected repository. Ohayo resolves Claude
+  account/plugin skills plus ancestor `.claude/skills`, and Codex account
+  skills plus `$HOME/.agents/skills`, ancestor `.agents/skills`, and skills
+  exposed by plugins that the selected account reports as installed and
+  enabled through `codex plugin list --json`. The inventory check is
+  read-only and never runs a prompt. The dispatch prefixes the skill to the
+  prompt (`/skill message` for Claude, `$skill message` for Codex). Selecting
+  a skill loads Claude customizations; the UI makes clear that this expands
+  context and is not a filesystem sandbox
 - **History** — recent dispatches as cards with status, provider icon, model,
   account alias/email, command, response and error details; filterable by
   account the same way as Tasks
-- **General** — Launch at Login, time remaining in the menu bar, how many
-  upcoming fires the menu panel shows (1–5), Language (English or
-  Portuguese), and the app version
+- **General** — Launch at Login, time remaining in the menu bar, sensitive
+  notification details (off by default), how many upcoming fires the menu
+  panel shows (1–5), Language (English or Portuguese), permissions, and the
+  app version
 
 ### First-run permissions
 
-The packaged app opens a non-blocking setup guide once. You can allow
-notifications, test the Terminal automation used for interactive sessions, and
-optionally enable Launch at Login. Closing the guide does not disable the app;
-reopen it from **Settings → General → Permissions…**.
+The packaged app opens a non-blocking setup guide once. Its Provider Doctor
+checks which Claude/Codex CLIs and configured accounts are ready, and shows the
+correct login command when attention is needed. These checks are read-only:
+they never execute a prompt, start a login, or consume quota. You can also
+allow notifications, test the Terminal automation used for interactive
+sessions, and optionally enable Launch at Login. Closing the guide does not
+disable the app; reopen it from **Settings → General → Permissions…**.
 
 If notifications or Terminal automation were denied, change them in **System
 Settings → Notifications → Ohayo** or **System Settings → Privacy & Security →
@@ -143,53 +164,92 @@ Automation**, then reopen the guide to refresh or test the integration.
 ## How it works
 
 To manage continuous renewals, Ohayo streams the account's local transcripts
-(`<account>/projects/**.jsonl` for Claude, `sessions/**.jsonl` for Codex, line
-by line, ordered by `mtime`) and reconstructs the current 5-hour window. If one
-is active, only a redundant continuous renewal is skipped; fixed-time schedules
-always run. A window starts at the exact time of its first message and lasts
-5 hours (matching how the plan counts it — `/usage` resets exactly 5 hours
-after the first message).
+(`<account>/projects/**.jsonl` for Claude, `sessions/**.jsonl` for Codex,
+ordered by `mtime`) and reconstructs the current 5-hour window. It accepts only
+positive usage evidence: a real, non-error Claude assistant event with token
+usage, or a Codex `token_count` event with positive `last_token_usage`.
+Synthetic/auth/model/network failures and zero-token events do not create a
+fictional window. Unreadable transcripts or an unknown usage schema become an
+explicit unavailable state and never trigger a bootstrap. If a window is
+active, only a redundant continuous renewal is skipped; fixed-time schedules
+always run.
 
 A Claude dispatch runs:
 
 ```
-claude -p --model <model> --effort <effort> [--safe-mode] "<prompt>"
+claude -p --model <model> --effort <effort> [--safe-mode]
 ```
 
-with `CLAUDE_CONFIG_DIR` pinned to the target account when the schedule is in
-batch mode. If the schedule has a skill, the prompt is prefixed before dispatch
-(`/skill message` for Claude, `$skill message` for Codex), and safe mode is
-forced off because `--safe-mode` would skip skills. By default, Claude/Codex
-open in Terminal.app without `-p` / `exec`, using the same prompt and
-environment so the interactive session stays open;
-a fixed-time interactive schedule opens at its scheduled time even if the
-account already has an active window. When no working directory is set,
-interactive sessions open in
-`~/Library/Application Support/Ohayo/workspace` (never the home folder,
-whose trust Claude Code only keeps per session), and Ohayo
-pre-trusts the folder in the account's `.claude.json` — and pre-approves
-external `CLAUDE.md` imports — so neither the "do you trust this folder?" nor
-the "allow external imports?" prompt blocks the unattended session. Only one
-Ohayo instance runs at a time: a second
-launch shows a notice and quits (two instances would double-fire schedules).
-The defaults — Haiku, low effort, `--safe-mode` (skips CLAUDE.md/skills/MCP) and
-the command `1+1` — make it the cheapest possible ping that opens the window. A
-batch Codex dispatch runs `codex exec [--model <model>] --sandbox read-only [-c
-model_reasoning_effort=<effort>] "<prompt>"` with `CODEX_HOME` pinned instead,
-and has its own minimal built-in `1+1` default. When you leave the Codex model
-(or reasoning) unset, Ohayo omits the flag so the account's own
-`config.toml` default is used — the only value guaranteed to be accepted by the
-account's plan. Shell commands run through your login shell.
+The prompt is written to stdin rather than exposed in the process argument
+list. The native Claude account deliberately runs with
+`CLAUDE_CONFIG_DIR` unset, because exporting `~/.claude` changes Claude Code's
+account semantics; custom Claude profiles receive the override. Codex receives
+the selected `CODEX_HOME`, defaulting to `~/.codex`. Shell tasks receive
+neither provider variable.
+
+If the schedule has a skill, the prompt is prefixed before dispatch (`/skill
+message` for Claude, `$skill message` for Codex). For Claude this requires
+customizations to be loaded; “ignore Claude customizations” is not presented
+as a sandbox.
+
+By default, Claude/Codex open in Terminal.app without `-p` / `exec`, so the
+interactive session stays open. Opening Terminal is recorded as **Launched**,
+not as a completed run: Ohayo cannot observe that session's final exit status.
+A fixed-time interactive schedule still opens at its scheduled time when an
+account has an active window. With no working directory, it opens in
+`~/Library/Application Support/Ohayo/workspace`. The private temporary launch
+script is mode `0600`, removes itself on exit/signals, and stale crash residues
+are cleaned up. Ohayo seeds basic Claude project trust only for that
+app-managed workspace. A working directory selected or imported by the user is
+never pre-trusted by Ohayo, so Claude remains responsible for showing its normal
+trust prompt in Terminal when needed.
+External `CLAUDE.md` imports are never pre-approved either; their consent also
+remains visible.
+
+The built-in Claude defaults — Haiku, low effort, ignored customizations and
+`1+1` — provide a minimal renewal prompt. A batch Codex dispatch runs `codex
+exec [--model <model>] --sandbox read-only [-c
+model_reasoning_effort=<effort>]`; its prompt also comes from stdin. When model
+or reasoning is set to **Account default**, Ohayo omits the corresponding flag
+so `config.toml` wins. Batch timeouts are configurable per schedule: the
+defaults are 15 minutes for Claude/Codex and 5 minutes for shell, while
+interactive Terminal sessions are not supervised by a timeout. Captured output
+is bounded while preserving both its beginning and error-bearing tail.
+
+Only one Ohayo instance runs at a time. Within it, runs are FIFO per
+provider/account instead of being silently discarded by one global lock;
+different accounts can advance concurrently. Transient failures retry with
+bounded exponential backoff, while missing authentication/CLI or Terminal
+permission becomes a needs-attention state rather than an alert loop.
 
 Which account is Claude vs. Codex is inferred from folder content, not name,
 in this order: a `.claude.json` means Claude; else an `auth.json` means Codex;
 else a `projects/` subfolder means Claude; else a `sessions/` subfolder means
-Codex. So `auth.json` wins over `projects/` when both are present.
+Codex. The provider of a registered custom account is also persisted, so a
+temporarily missing or ambiguous folder is not reinterpreted as another
+provider; dispatch and quota checks receive that identity explicitly.
+Existing account folders use their canonical filesystem path as identity.
+Registering or selecting a symlink to the same Claude/Codex account therefore
+does not create another queue, schedule, pause state or quota cooldown.
 
-A **Continuous** schedule arms at the end of the detected window and chains
-the next one, 24/7; a redundant renewal attempt is skipped while the account
-window is still active. A **Fixed times** schedule always fires at its times ×
-weekdays, in either batch or interactive mode. On wake, fixed times fire at
-most once to catch up the most recent occurrence missed — a long sleep never
-triggers a burst of backlogged fires, and launch itself never replays
+A new **Continuous** schedule waits when no active-window evidence exists
+unless you explicitly enable **Try to start when no active window is
+detected**. The form warns that the command may consume provider quota and
+that an interactive Terminal session can still require your confirmation.
+After a delivered bootstrap attempt, Ohayo waits up to five hours before
+trying another one for that schedule, including across app restarts; if a real
+window appears first, its transcript replaces the cooldown. Known transient
+failures retain their shorter exponential retry, measured after the failure
+returns. A scheduled hand-off keeps its own crash-recovery cooldown even when
+bootstrap opt-in is off. Authentication, CLI,
+permission or configuration errors stop in a needs-attention state instead of
+becoming another cooldown. Pausing the account or turning the option off
+cancels bootstrap work.
+After a window is detected, Ohayo arms at its end and chains the next one; a
+redundant attempt is skipped while the account window is active.
+Schedules created by older Ohayo versions remain waiting until you edit them
+and explicitly enable this option. A **Fixed times** schedule always fires at
+its times × weekdays, in either batch or interactive mode. On wake, fixed times
+fire at most once to catch up the most recent occurrence missed — a long sleep
+never triggers a burst of backlogged fires, and launch itself never replays
 occurrences missed before it.

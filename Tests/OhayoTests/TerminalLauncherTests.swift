@@ -24,6 +24,21 @@ final class TerminalLauncherTests: XCTestCase {
         XCTAssertFalse(spec.terminalScript.contains("export PATH"))
     }
 
+    func testClaudeNativoNaoExportaClaudeConfigDirNoTerminal() throws {
+        let nativeDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude")
+        let msg = Message(text: "oi", kind: .claude,
+                          configDir: nativeDir.path,
+                          workingDir: "/tmp/projeto")
+
+        let spec = try XCTUnwrap(TerminalLauncher.spec(
+            for: msg, claudeBinary: URL(fileURLWithPath: "/tmp/claude")
+        ))
+
+        XCTAssertFalse(spec.terminalScript.contains("export CLAUDE_CONFIG_DIR"))
+        XCTAssertEqual(spec.accountDir, nativeDir.path)
+    }
+
     func testLaunchEscreveScriptEmArquivoTemporarioERodaViaSh() async throws {
         let captured = Captura()
         var launcher = TerminalLauncher(claudeBinaryOverride: URL(fileURLWithPath: "/tmp/fake claude"))
@@ -52,7 +67,68 @@ final class TerminalLauncherTests: XCTestCase {
         XCTAssertTrue(content.contains("export CLAUDE_CONFIG_DIR='/tmp/conta claude'"))
         XCTAssertTrue(content.contains("cd '/tmp/proj'"))
         XCTAssertTrue(content.contains("'/tmp/fake claude'"))
-        XCTAssertTrue(content.contains("rm -f -- '\(path)'")) // autolimpeza ao terminar
+        XCTAssertTrue(content.contains("trap cleanup EXIT"))
+        XCTAssertTrue(content.contains("trap 'exit 129' HUP"))
+        XCTAssertTrue(content.contains("trap 'exit 130' INT"))
+        XCTAssertTrue(content.contains("trap 'exit 143' TERM"))
+        XCTAssertTrue(content.contains("cleanup() { rm -f -- '\(path)'; }"))
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        XCTAssertEqual(permissions & 0o777, 0o600)
+    }
+
+    func testLimpaSomenteScriptsTemporariosAntigosDoOhayo() throws {
+        let directory = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let old = directory.appendingPathComponent("ohayo-terminal-old.sh")
+        let fresh = directory.appendingPathComponent("ohayo-terminal-fresh.sh")
+        let unrelated = directory.appendingPathComponent("other-old.sh")
+        for file in [old, fresh, unrelated] {
+            XCTAssertTrue(FileManager.default.createFile(
+                atPath: file.path, contents: Data("secret".utf8)
+            ))
+        }
+        let now = Date(timeIntervalSince1970: 10_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-3_601)],
+            ofItemAtPath: old.path
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: now],
+            ofItemAtPath: fresh.path
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-3_601)],
+            ofItemAtPath: unrelated.path
+        )
+
+        TerminalLauncher.cleanupStaleScripts(in: directory, now: now)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
+    func testLimpezaDeStartupRemoveResiduoRecenteSemEsperarOutroLaunch() throws {
+        let directory = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let residue = directory.appendingPathComponent("ohayo-terminal-crash.sh")
+        XCTAssertTrue(FileManager.default.createFile(
+            atPath: residue.path, contents: Data("prompt".utf8)
+        ))
+        let now = Date(timeIntervalSince1970: 20_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-1)],
+            ofItemAtPath: residue.path
+        )
+
+        TerminalLauncher.cleanupStaleScripts(
+            in: directory,
+            now: now,
+            olderThan: 0
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: residue.path))
     }
 
     func testSpecUsaWorkspaceDoAppComoDiretorioPadrao() throws {
@@ -64,19 +140,22 @@ final class TerminalLauncherTests: XCTestCase {
             for: msg, claudeBinary: URL(fileURLWithPath: "/tmp/claude"),
             defaultWorkspace: workspace))
         XCTAssertTrue(spec.terminalScript.contains("cd '\(workspace.path)'"))
+        XCTAssertTrue(spec.usesOhayoManagedWorkspace)
     }
 
-    func testLaunchPreConfiaPastaDeTrabalhoNoClaudeJsonDaConta() async throws {
+    func testLaunchDeProjetoEscolhidoMantemPromptDeTrustVisivel() async throws {
         let conta = try makeTempDir()
         let proj = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: conta); try? FileManager.default.removeItem(at: proj) }
-        // .claude.json existente com outras chaves que DEVEM ser preservadas.
+        // Projetos escolhidos/importados pertencem à pessoa: o Ohayo não pode
+        // responder automaticamente ao prompt de trust em nome dela.
         let existente: [String: Any] = [
             "oauthAccount": ["emailAddress": "x@y.z"],
             "projects": ["/outra": ["hasTrustDialogAccepted": false, "allowedTools": ["Bash"]]]
         ]
         let jsonURL = conta.appendingPathComponent(".claude.json")
-        try JSONSerialization.data(withJSONObject: existente).write(to: jsonURL)
+        let bytesOriginais = try JSONSerialization.data(withJSONObject: existente)
+        try bytesOriginais.write(to: jsonURL)
 
         var launcher = TerminalLauncher(claudeBinaryOverride: URL(fileURLWithPath: "/tmp/claude"))
         launcher.appleScriptRunner = { _ in .success(()) }
@@ -84,65 +163,122 @@ final class TerminalLauncherTests: XCTestCase {
                           configDir: conta.path, workingDir: proj.path)
         guard case .success = await launcher.launch(msg) else { return XCTFail() }
 
-        let atualizado = try JSONSerialization.jsonObject(
-            with: Data(contentsOf: jsonURL)) as! [String: Any]
+        let bytesAtualizados = try Data(contentsOf: jsonURL)
+        XCTAssertEqual(
+            bytesAtualizados,
+            bytesOriginais,
+            "o Ohayo não deve regravar o arquivo de identidade para um projeto escolhido"
+        )
+        let atualizado = try JSONSerialization.jsonObject(with: bytesAtualizados) as! [String: Any]
         let projects = atualizado["projects"] as! [String: Any]
-        // Chave canonicalizada (símbolos resolvidos), como o CLI grava.
-        let entrada = projects[proj.resolvingSymlinksInPath().path] as! [String: Any]
-        XCTAssertEqual(entrada["hasTrustDialogAccepted"] as? Bool, true)
-        XCTAssertEqual(entrada["hasClaudeMdExternalIncludesApproved"] as? Bool, true)
-        XCTAssertEqual(entrada["hasClaudeMdExternalIncludesWarningShown"] as? Bool, true)
-        // Preserva o resto do arquivo e das entradas existentes.
+        XCTAssertNil(
+            projects[proj.resolvingSymlinksInPath().path],
+            "o Ohayo não deve pré-aprovar o trust de um projeto escolhido"
+        )
         XCTAssertNotNil(atualizado["oauthAccount"])
         let outra = projects["/outra"] as! [String: Any]
         XCTAssertEqual(outra["allowedTools"] as? [String], ["Bash"])
     }
 
-    func testLaunchCriaClaudeJsonQuandoAusente() async throws {
+    func testLaunchNoWorkspaceControladoCriaClaudeJsonQuandoAusente() async throws {
         let conta = try makeTempDir()
         let proj = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: conta); try? FileManager.default.removeItem(at: proj) }
         var launcher = TerminalLauncher(claudeBinaryOverride: URL(fileURLWithPath: "/tmp/claude"))
+        launcher.defaultWorkspaceOverride = proj
         launcher.appleScriptRunner = { _ in .success(()) }
-        let msg = Message(text: "oi", kind: .claude,
-                          configDir: conta.path, workingDir: proj.path)
+        let msg = Message(text: "oi", kind: .claude, configDir: conta.path)
         guard case .success = await launcher.launch(msg) else { return XCTFail() }
 
         let json = try JSONSerialization.jsonObject(with: Data(
             contentsOf: conta.appendingPathComponent(".claude.json"))) as! [String: Any]
         let entrada = (json["projects"] as! [String: Any])[proj.resolvingSymlinksInPath().path] as! [String: Any]
         XCTAssertEqual(entrada["hasTrustDialogAccepted"] as? Bool, true)
-        XCTAssertEqual(entrada["hasClaudeMdExternalIncludesApproved"] as? Bool, true)
-        XCTAssertEqual(entrada["hasClaudeMdExternalIncludesWarningShown"] as? Bool, true)
+        XCTAssertNil(entrada["hasClaudeMdExternalIncludesApproved"])
+        XCTAssertNil(entrada["hasClaudeMdExternalIncludesWarningShown"])
     }
 
-    func testLaunchAprovaImportsExternosMesmoComTrustJaAceito() async throws {
-        // Regressão do prompt "Allow external CLAUDE.md file imports?": conta já
-        // confiada (hasTrustDialogAccepted=true) mas que nunca aprovou imports
-        // externos. O early-return antigo (só olhava o trust) pulava a
-        // aprovação, e a sessão travava esperando Enter.
+    func testSeedTrustClaudeNativoUsaClaudeJsonNoHome() throws {
+        let home = try makeTempDir()
+        let nativeDir = home.appendingPathComponent(".claude")
+        let proj = try makeTempDir()
+        try FileManager.default.createDirectory(at: nativeDir, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: home)
+            try? FileManager.default.removeItem(at: proj)
+        }
+
+        TerminalLauncher.seedTrust(
+            accountDir: nativeDir.path,
+            workingDir: proj.path,
+            homeDirectory: home
+        )
+
+        let rootFile = home.appendingPathComponent(".claude.json")
+        let json = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: rootFile)
+        ) as! [String: Any]
+        let projects = json["projects"] as! [String: Any]
+        XCTAssertNotNil(projects[proj.resolvingSymlinksInPath().path])
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: nativeDir.appendingPathComponent(".claude.json").path
+        ))
+    }
+
+    func testLaunchNaoPreAprovaImportsExternosMesmoComTrustAceito() async throws {
+        // Mesmo no workspace controlado, imports de CLAUDE.md fora do projeto
+        // exigem consentimento visível no Terminal.
         let conta = try makeTempDir()
         let proj = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: conta); try? FileManager.default.removeItem(at: proj) }
         // Fixture sob a chave canônica (é assim que o CLI a grava).
         let key = proj.resolvingSymlinksInPath().path
         let existente: [String: Any] = [
-            "projects": [key: ["hasTrustDialogAccepted": true]]
+            "projects": [key: ["hasTrustDialogAccepted": false]]
         ]
         let jsonURL = conta.appendingPathComponent(".claude.json")
         try JSONSerialization.data(withJSONObject: existente).write(to: jsonURL)
 
         var launcher = TerminalLauncher(claudeBinaryOverride: URL(fileURLWithPath: "/tmp/claude"))
+        launcher.defaultWorkspaceOverride = proj
         launcher.appleScriptRunner = { _ in .success(()) }
-        let msg = Message(text: "oi", kind: .claude,
-                          configDir: conta.path, workingDir: proj.path)
+        let msg = Message(text: "oi", kind: .claude, configDir: conta.path)
         guard case .success = await launcher.launch(msg) else { return XCTFail() }
 
         let json = try JSONSerialization.jsonObject(with: Data(contentsOf: jsonURL)) as! [String: Any]
         let entrada = (json["projects"] as! [String: Any])[key] as! [String: Any]
         XCTAssertEqual(entrada["hasTrustDialogAccepted"] as? Bool, true)
-        XCTAssertEqual(entrada["hasClaudeMdExternalIncludesApproved"] as? Bool, true)
-        XCTAssertEqual(entrada["hasClaudeMdExternalIncludesWarningShown"] as? Bool, true)
+        XCTAssertNil(entrada["hasClaudeMdExternalIncludesApproved"])
+        XCTAssertNil(entrada["hasClaudeMdExternalIncludesWarningShown"])
+    }
+
+    func testSeedTrustPreservaConsentimentoDeImportsExistente() throws {
+        let conta = try makeTempDir()
+        let proj = try makeTempDir()
+        defer {
+            try? FileManager.default.removeItem(at: conta)
+            try? FileManager.default.removeItem(at: proj)
+        }
+        let key = proj.resolvingSymlinksInPath().path
+        let existente: [String: Any] = [
+            "projects": [key: [
+                "hasTrustDialogAccepted": false,
+                "hasClaudeMdExternalIncludesApproved": true,
+                "hasClaudeMdExternalIncludesWarningShown": true,
+            ]]
+        ]
+        let jsonURL = conta.appendingPathComponent(".claude.json")
+        try JSONSerialization.data(withJSONObject: existente).write(to: jsonURL)
+
+        TerminalLauncher.seedTrust(accountDir: conta.path, workingDir: proj.path)
+
+        let json = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: jsonURL)
+        ) as! [String: Any]
+        let entry = (json["projects"] as! [String: Any])[key] as! [String: Any]
+        XCTAssertEqual(entry["hasTrustDialogAccepted"] as? Bool, true)
+        XCTAssertEqual(entry["hasClaudeMdExternalIncludesApproved"] as? Bool, true)
+        XCTAssertEqual(entry["hasClaudeMdExternalIncludesWarningShown"] as? Bool, true)
     }
 
     func testLaunchNaoSobrescreveClaudeJsonIlegivel() async throws {
@@ -160,16 +296,16 @@ final class TerminalLauncherTests: XCTestCase {
         try bytesCorrompidos.write(to: jsonURL)
 
         var launcher = TerminalLauncher(claudeBinaryOverride: URL(fileURLWithPath: "/tmp/claude"))
+        launcher.defaultWorkspaceOverride = proj
         launcher.appleScriptRunner = { _ in .success(()) }
-        let msg = Message(text: "oi", kind: .claude,
-                          configDir: conta.path, workingDir: proj.path)
+        let msg = Message(text: "oi", kind: .claude, configDir: conta.path)
         guard case .success = await launcher.launch(msg) else { return XCTFail() }
 
         // O arquivo permanece byte a byte intacto — nada foi destruído.
         XCTAssertEqual(try Data(contentsOf: jsonURL), bytesCorrompidos)
     }
 
-    func testSeedTrustUsaCaminhoCanonicalizadoComoChave() async throws {
+    func testSeedTrustUsaCaminhoCanonicalizadoComoChave() throws {
         // Um working dir com barra final e segmento `/./` deve virar a MESMA
         // chave canônica que o CLI usaria (getcwd após o cd) — senão o trust
         // semeado não casa e a sessão trava no prompt.
@@ -178,11 +314,10 @@ final class TerminalLauncherTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: conta); try? FileManager.default.removeItem(at: proj) }
         let naoCanonico = proj.path + "/./"
 
-        var launcher = TerminalLauncher(claudeBinaryOverride: URL(fileURLWithPath: "/tmp/claude"))
-        launcher.appleScriptRunner = { _ in .success(()) }
-        let msg = Message(text: "oi", kind: .claude,
-                          configDir: conta.path, workingDir: naoCanonico)
-        guard case .success = await launcher.launch(msg) else { return XCTFail() }
+        TerminalLauncher.seedTrust(
+            accountDir: conta.path,
+            workingDir: naoCanonico
+        )
 
         let json = try JSONSerialization.jsonObject(with: Data(
             contentsOf: conta.appendingPathComponent(".claude.json"))) as! [String: Any]

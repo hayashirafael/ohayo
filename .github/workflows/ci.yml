@@ -7,7 +7,39 @@ on:
 
 jobs:
   test:
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate packaging scripts and workflows
+        run: |
+          bash -n scripts/make-app.sh scripts/make-dmg.sh
+          ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' \
+            .github/workflows/ci.yml .github/workflows/release.yml
       - run: swift test
+      - name: Build universal app
+        if: matrix.os == 'macos-15'
+        env:
+          OHAYO_UNIVERSAL_BUILD: "1"
+        run: ./scripts/make-app.sh
+      - name: Verify packaged app
+        if: matrix.os == 'macos-15'
+        run: |
+          test -x build/Ohayo.app/Contents/MacOS/Ohayo
+          test -d build/Ohayo.app/Contents/Resources/Ohayo_Ohayo.bundle
+          lipo build/Ohayo.app/Contents/MacOS/Ohayo \
+            -verify_arch arm64 x86_64
+          minos_count="$(vtool -show-build build/Ohayo.app/Contents/MacOS/Ohayo \
+            | awk '$1 == "minos" && $2 == "13.0" { count++ } END { print count + 0 }')"
+          [[ "$minos_count" -eq 2 ]] || {
+            echo "::error::As duas arquiteturas devem manter deployment target macOS 13.0" >&2
+            exit 1
+          }
+          plutil -lint scripts/Ohayo.entitlements
+          codesign --verify --deep --strict --verbose=2 build/Ohayo.app
+          codesign --display --entitlements - build/Ohayo.app 2>&1 \
+            | grep -q 'com.apple.security.automation.apple-events'
+          plutil -lint build/Ohayo.app/Contents/Info.plist

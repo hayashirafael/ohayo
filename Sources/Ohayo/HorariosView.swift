@@ -408,7 +408,31 @@ struct HorariosView: View {
         guard row.task.enabled else { return nil }
         switch row.task.repetition {
         case .continuous:
+            if let path = row.accountPath,
+               state.quotaUnavailableReasons[
+                   URL(fileURLWithPath: path).standardizedFileURL
+               ] != nil {
+                return strings.quotaUnavailable
+            }
+            if let path = row.accountPath,
+               state.renewalNeedsAttention.contains(
+                   URL(fileURLWithPath: path).standardizedFileURL
+               ) {
+                return strings.needsAttention
+            }
             guard let next = row.nextFire else { return strings.waitingForWindow }
+            switch state.renewalRecoveryState(for: row.task) {
+            case .retry:
+                return strings.retriesAt(
+                    Fmt.hhmm(next, language: state.language)
+                )
+            case .cooldown:
+                return strings.mayTryAt(
+                    Fmt.hhmm(next, language: state.language)
+                )
+            case .needsAttention, .none:
+                break
+            }
             return strings.renewsAt(Fmt.hhmm(next, language: state.language))
         case .fixed:
             guard let next = row.nextFire else { return nil }

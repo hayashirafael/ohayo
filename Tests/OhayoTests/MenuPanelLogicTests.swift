@@ -7,8 +7,9 @@ final class MenuPanelLogicTests: XCTestCase {
     let now = Date(timeIntervalSince1970: 1_783_000_000)
 
     private func task(uid: UUID = UUID(), name: String? = nil, text: String = "1+1",
+                      kind: Message.Kind = .claude,
                       repetition: ScheduledTask.Repetition, enabled: Bool = true) -> ScheduledTask {
-        var t = ScheduledTask(uid: uid, command: Message(text: text, kind: .claude))
+        var t = ScheduledTask(uid: uid, command: Message(text: text, kind: kind))
         t.name = name
         t.repetition = repetition
         t.enabled = enabled
@@ -62,7 +63,7 @@ final class MenuPanelLogicTests: XCTestCase {
             accountDir: { dirs[$0.uid] }, now: now, limit: 5,
             renewalFallbackName: "renovação")
         XCTAssertEqual(result.map(\.name), ["teste", "renovação"])
-        XCTAssertEqual(result.map(\.account), [contaB, contaA])
+        XCTAssertEqual(result.compactMap(\.account), [contaB, contaA])
         XCTAssertEqual(result.map(\.date),
                        [now.addingTimeInterval(3600), now.addingTimeInterval(7200)])
         XCTAssertEqual(result.first?.taskUID, fixo.uid)
@@ -111,6 +112,40 @@ final class MenuPanelLogicTests: XCTestCase {
         XCTAssertEqual(result, [])
     }
 
+    func testUpcomingNaoExibeRenovacaoComQuotaIndisponivel() {
+        let continuo = task(name: "renovação", repetition: .continuous)
+        let result = MenuPanelLogic.upcomingEvents(
+            tasks: [continuo],
+            nextRenewals: [contaA: now.addingTimeInterval(3_600)],
+            nextTaskFires: [:],
+            isPaused: { _ in false },
+            isQuotaUnavailable: { $0 == self.contaA },
+            accountDir: { _ in self.contaA },
+            now: now,
+            limit: 5,
+            renewalFallbackName: "renovação"
+        )
+
+        XCTAssertTrue(result.isEmpty)
+    }
+
+    func testUpcomingNaoExibeRenovacaoQueRequerAtencao() {
+        let continuo = task(name: "renovação", repetition: .continuous)
+        let result = MenuPanelLogic.upcomingEvents(
+            tasks: [continuo],
+            nextRenewals: [contaA: now.addingTimeInterval(3_600)],
+            nextTaskFires: [:],
+            isPaused: { _ in false },
+            needsAttention: { $0 == self.contaA },
+            accountDir: { _ in self.contaA },
+            now: now,
+            limit: 5,
+            renewalFallbackName: "renovação"
+        )
+
+        XCTAssertTrue(result.isEmpty)
+    }
+
     func testUpcomingMesmaContaPodeAparecerDuasVezes() {
         let t1 = task(name: "a", repetition: .fixed)
         let t2 = task(name: "b", repetition: .fixed)
@@ -122,7 +157,20 @@ final class MenuPanelLogicTests: XCTestCase {
             accountDir: { _ in self.contaA }, now: now, limit: 5,
             renewalFallbackName: "renovação")
         XCTAssertEqual(result.count, 2)
-        XCTAssertEqual(Set(result.map(\.account)), [contaA])
+        XCTAssertEqual(Set(result.compactMap(\.account)), [contaA])
+    }
+
+    func testUpcomingIncluiComandoShellSemConta() {
+        let shell = task(name: "backup", text: "make backup", kind: .shell, repetition: .fixed)
+        let result = MenuPanelLogic.upcomingEvents(
+            tasks: [shell], nextRenewals: [:],
+            nextTaskFires: [shell.uid: now.addingTimeInterval(60)],
+            isPaused: { _ in true },
+            accountDir: { _ in nil }, now: now, limit: 5,
+            renewalFallbackName: "renovação")
+
+        XCTAssertEqual(result.map(\.name), ["backup"])
+        XCTAssertNil(result.first?.account)
     }
 
     // MARK: - emptyState
@@ -145,6 +193,46 @@ final class MenuPanelLogicTests: XCTestCase {
         let t = task(repetition: .continuous)
         let state = MenuPanelLogic.emptyState(
             tasks: [t], accountDir: { _ in self.contaA }, isPaused: { _ in false })
+        XCTAssertEqual(state, .waiting)
+    }
+
+    func testEmptyStateDistingueQuotaIndisponivel() {
+        let t = task(repetition: .continuous)
+        let state = MenuPanelLogic.emptyState(
+            tasks: [t],
+            accountDir: { _ in self.contaA },
+            isPaused: { _ in false },
+            isQuotaUnavailable: { $0 == self.contaA }
+        )
+        XCTAssertEqual(state, .quotaUnavailable)
+    }
+
+    func testEmptyStateDistingueContaQueRequerAtencao() {
+        let t = task(repetition: .continuous)
+        let state = MenuPanelLogic.emptyState(
+            tasks: [t],
+            accountDir: { _ in self.contaA },
+            isPaused: { _ in false },
+            needsAttention: { $0 == self.contaA }
+        )
+        XCTAssertEqual(state, .needsAttention)
+    }
+
+    func testEmptyStateNaoBloqueiaHorarioFixoPorQuotaIndisponivel() {
+        let t = task(repetition: .fixed)
+        let state = MenuPanelLogic.emptyState(
+            tasks: [t],
+            accountDir: { _ in self.contaA },
+            isPaused: { _ in false },
+            isQuotaUnavailable: { _ in true }
+        )
+        XCTAssertEqual(state, .waiting)
+    }
+
+    func testEmptyStateComShellHabilitadoNaoDizSemAgendamentos() {
+        let shell = task(kind: .shell, repetition: .fixed)
+        let state = MenuPanelLogic.emptyState(
+            tasks: [shell], accountDir: { _ in nil }, isPaused: { _ in true })
         XCTAssertEqual(state, .waiting)
     }
 }

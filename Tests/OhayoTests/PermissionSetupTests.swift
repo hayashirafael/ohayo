@@ -24,7 +24,7 @@ final class PermissionSetupTests: XCTestCase {
         XCTAssertFalse(PermissionAccessStatus.allowed.allowsRequest)
         XCTAssertFalse(PermissionAccessStatus.unavailable.allowsRequest)
         XCTAssertTrue(PermissionAccessStatus.notConfigured.allowsRequest)
-        XCTAssertTrue(PermissionAccessStatus.denied.allowsRequest)
+        XCTAssertFalse(PermissionAccessStatus.denied.allowsRequest)
         XCTAssertTrue(PermissionAccessStatus.failed("temporary").allowsRequest)
     }
 
@@ -71,6 +71,17 @@ final class PermissionSetupTests: XCTestCase {
         XCTAssertEqual(
             SystemTerminalAutomationClient.probeScript,
             "tell application \"Terminal\" to get name"
+        )
+    }
+
+    func testDeniedPermissionsLinkToTheMatchingSystemSettingsPane() {
+        XCTAssertEqual(
+            PermissionSettingsDestination.notifications.url.absoluteString,
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+        )
+        XCTAssertEqual(
+            PermissionSettingsDestination.terminalAutomation.url.absoluteString,
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
         )
     }
 
@@ -125,6 +136,23 @@ final class PermissionSetupTests: XCTestCase {
     }
 
     @MainActor
+    func testDeniedNotificationDoesNotRequestAgain() async {
+        let notifications = NotificationFake(.denied)
+        let model = PermissionSetupModel(
+            notifications: notifications,
+            terminal: TerminalFake(.notConfigured),
+            loginItem: ClosureLoginItemManager(
+                isSupported: false, getEnabled: { false }, setEnabled: { _ in }))
+
+        await model.refresh()
+        await model.requestNotifications()
+
+        XCTAssertEqual(model.notificationStatus, .denied)
+        let requestCount = await notifications.requestCount
+        XCTAssertEqual(requestCount, 0)
+    }
+
+    @MainActor
     func testTerminalActionOnlyRunsWhenExplicitlyCalled() async {
         let terminal = TerminalFake(.denied)
         let model = PermissionSetupModel(
@@ -140,6 +168,39 @@ final class PermissionSetupTests: XCTestCase {
         XCTAssertEqual(model.terminalStatus, .denied)
         let testCount = await terminal.testCount
         XCTAssertEqual(testCount, 1)
+    }
+
+    @MainActor
+    func testDeniedTerminalDoesNotTryAutomationAgain() async {
+        let terminal = TerminalFake(.denied)
+        let model = PermissionSetupModel(
+            notifications: NotificationFake(.notConfigured),
+            terminal: terminal,
+            loginItem: ClosureLoginItemManager(
+                isSupported: false, getEnabled: { false }, setEnabled: { _ in }))
+
+        await model.testTerminal()
+        await model.testTerminal()
+
+        XCTAssertEqual(model.terminalStatus, .denied)
+        let testCount = await terminal.testCount
+        XCTAssertEqual(testCount, 1)
+    }
+
+    @MainActor
+    func testModelOpensSystemSettingsThroughInjectedClient() {
+        let settings = SettingsFake()
+        let model = PermissionSetupModel(
+            notifications: NotificationFake(.denied),
+            terminal: TerminalFake(.denied),
+            loginItem: ClosureLoginItemManager(
+                isSupported: false, getEnabled: { false }, setEnabled: { _ in }),
+            settings: settings)
+
+        model.openSettings(.notifications)
+        model.openSettings(.terminalAutomation)
+
+        XCTAssertEqual(settings.opened, [.notifications, .terminalAutomation])
     }
 }
 
@@ -164,5 +225,12 @@ private actor TerminalFake: TerminalAutomationClient {
     func test() async -> PermissionAccessStatus {
         testCount += 1
         return result
+    }
+}
+
+private final class SettingsFake: PermissionSettingsOpening {
+    private(set) var opened: [PermissionSettingsDestination] = []
+    func open(_ destination: PermissionSettingsDestination) {
+        opened.append(destination)
     }
 }

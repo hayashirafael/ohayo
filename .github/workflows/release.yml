@@ -6,14 +6,237 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: write
+    env:
+      OHAYO_CODESIGN_IDENTITY: ${{ secrets.OHAYO_CODESIGN_IDENTITY }}
+      OHAYO_UNIVERSAL_BUILD: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Validate distribution credential configuration
+        id: credentials
+        env:
+          OHAYO_CODESIGN_CERTIFICATE_BASE64: ${{ secrets.OHAYO_CODESIGN_CERTIFICATE_BASE64 }}
+          OHAYO_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.OHAYO_CODESIGN_CERTIFICATE_PASSWORD }}
+          OHAYO_NOTARY_APPLE_ID: ${{ secrets.OHAYO_NOTARY_APPLE_ID }}
+          OHAYO_NOTARY_TEAM_ID: ${{ secrets.OHAYO_NOTARY_TEAM_ID }}
+          OHAYO_NOTARY_APP_SPECIFIC_PASSWORD: ${{ secrets.OHAYO_NOTARY_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          signing_names=(
+            OHAYO_CODESIGN_IDENTITY
+            OHAYO_CODESIGN_CERTIFICATE_BASE64
+            OHAYO_CODESIGN_CERTIFICATE_PASSWORD
+          )
+          notary_names=(
+            OHAYO_NOTARY_APPLE_ID
+            OHAYO_NOTARY_TEAM_ID
+            OHAYO_NOTARY_APP_SPECIFIC_PASSWORD
+          )
+
+          signing_count=0
+          for variable_name in "${signing_names[@]}"; do
+            [[ -z "${!variable_name}" ]] || signing_count=$((signing_count + 1))
+          done
+          notary_count=0
+          for variable_name in "${notary_names[@]}"; do
+            [[ -z "${!variable_name}" ]] || notary_count=$((notary_count + 1))
+          done
+
+          if (( signing_count > 0 && signing_count < ${#signing_names[@]} )); then
+            echo "::error::Configuração parcial. Defina juntos: ${signing_names[*]}" >&2
+            exit 1
+          fi
+          if (( notary_count > 0 && notary_count < ${#notary_names[@]} )); then
+            echo "::error::Configuração parcial. Defina juntos: ${notary_names[*]}" >&2
+            exit 1
+          fi
+          if (( signing_count == 0 || notary_count == 0 )); then
+            echo "::error::Release pública exige Developer ID e notarização. Configure todos os secrets OHAYO_CODESIGN_* e OHAYO_NOTARY_*." >&2
+            exit 1
+          fi
+
+          echo "signing_enabled=true" >> "$GITHUB_OUTPUT"
+          echo "notarization_enabled=true" >> "$GITHUB_OUTPUT"
+      - name: Validate packaging scripts and workflows
+        run: |
+          bash -n scripts/make-app.sh scripts/make-dmg.sh
+          ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' \
+            .github/workflows/ci.yml .github/workflows/release.yml
+          plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' scripts/Info.plist)"
+          if [[ "$GITHUB_REF_NAME" != "v${plist_version}" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME não corresponde ao Info.plist v${plist_version}" >&2
+            exit 1
+          fi
       - run: swift test
       - run: brew install create-dmg
+      - name: Import Developer ID certificate
+        if: steps.credentials.outputs.signing_enabled == 'true'
+        env:
+          OHAYO_CODESIGN_CERTIFICATE_BASE64: ${{ secrets.OHAYO_CODESIGN_CERTIFICATE_BASE64 }}
+          OHAYO_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.OHAYO_CODESIGN_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          certificate_path="$RUNNER_TEMP/ohayo-developer-id.p12"
+          keychain_path="$RUNNER_TEMP/ohayo-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+
+          printf '%s' "$OHAYO_CODESIGN_CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
+          chmod 600 "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$OHAYO_CODESIGN_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+
+          identities="$(security find-identity -v -p codesigning "$keychain_path")"
+          if [[ "$identities" != *'"Developer ID Application:'* ]]; then
+            echo "::error::O certificado importado não é Developer ID Application" >&2
+            exit 1
+          fi
+          if [[ "$identities" != *"$OHAYO_CODESIGN_IDENTITY"* ]]; then
+            echo "::error::OHAYO_CODESIGN_IDENTITY não corresponde ao certificado importado" >&2
+            exit 1
+          fi
+          rm -f "$certificate_path"
+
+          echo "OHAYO_CODESIGN_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+          echo "OHAYO_SIGNING_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
       - run: ./scripts/make-dmg.sh
+      - name: Verify packaged app and disk image
+        run: |
+          set -euo pipefail
+          dmg_files=(build/Ohayo-*.dmg)
+          [[ "${#dmg_files[@]}" -eq 1 ]] || {
+            echo "::error::Esperado exatamente um DMG, encontrados ${#dmg_files[@]}" >&2
+            exit 1
+          }
+
+          codesign --verify --deep --strict --verbose=2 build/Ohayo.app
+          lipo build/Ohayo.app/Contents/MacOS/Ohayo \
+            -verify_arch arm64 x86_64
+          minos_count="$(vtool -show-build build/Ohayo.app/Contents/MacOS/Ohayo \
+            | awk '$1 == "minos" && $2 == "13.0" { count++ } END { print count + 0 }')"
+          [[ "$minos_count" -eq 2 ]] || {
+            echo "::error::As duas arquiteturas devem manter deployment target macOS 13.0" >&2
+            exit 1
+          }
+          codesign --display --entitlements - build/Ohayo.app 2>&1 \
+            | grep -q 'com.apple.security.automation.apple-events'
+          plutil -lint build/Ohayo.app/Contents/Info.plist
+          plutil -lint scripts/Ohayo.entitlements
+          hdiutil verify "${dmg_files[0]}"
+
+          if [[ "${{ steps.credentials.outputs.signing_enabled }}" == "true" ]]; then
+            codesign --display --verbose=4 build/Ohayo.app 2>&1 | grep -q 'runtime'
+            codesign --verify --strict --verbose=2 "${dmg_files[0]}"
+          fi
+      - name: Configure notarization credentials
+        if: steps.credentials.outputs.notarization_enabled == 'true'
+        env:
+          OHAYO_NOTARY_APPLE_ID: ${{ secrets.OHAYO_NOTARY_APPLE_ID }}
+          OHAYO_NOTARY_TEAM_ID: ${{ secrets.OHAYO_NOTARY_TEAM_ID }}
+          OHAYO_NOTARY_APP_SPECIFIC_PASSWORD: ${{ secrets.OHAYO_NOTARY_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          xcrun notarytool store-credentials "ohayo-release" \
+            --keychain "$OHAYO_SIGNING_KEYCHAIN" \
+            --apple-id "$OHAYO_NOTARY_APPLE_ID" \
+            --team-id "$OHAYO_NOTARY_TEAM_ID" \
+            --password "$OHAYO_NOTARY_APP_SPECIFIC_PASSWORD" \
+            --validate
+      - name: Notarize, staple and validate distributed app
+        if: steps.credentials.outputs.notarization_enabled == 'true'
+        run: |
+          set -euo pipefail
+          dmg_files=(build/Ohayo-*.dmg)
+          [[ "${#dmg_files[@]}" -eq 1 ]]
+          result_path="$RUNNER_TEMP/ohayo-notarization-result.json"
+          mount_point="$RUNNER_TEMP/ohayo-notarized-mount"
+          smoke_log="$RUNNER_TEMP/ohayo-smoke.log"
+          mounted=false
+          smoke_pid=""
+
+          cleanup() {
+            if [[ -n "$smoke_pid" ]] && kill -0 "$smoke_pid" 2>/dev/null; then
+              kill "$smoke_pid" 2>/dev/null || true
+              wait "$smoke_pid" 2>/dev/null || true
+            fi
+            if [[ "$mounted" == true ]]; then
+              hdiutil detach "$mount_point" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          xcrun notarytool submit "${dmg_files[0]}" \
+            --keychain-profile "ohayo-release" \
+            --keychain "$OHAYO_SIGNING_KEYCHAIN" \
+            --wait \
+            --timeout 60m \
+            --output-format json > "$result_path"
+
+          status="$(plutil -extract status raw -o - "$result_path")"
+          if [[ "$status" != "Accepted" ]]; then
+            echo "::error::Apple Notary Service retornou status $status" >&2
+            exit 1
+          fi
+
+          xcrun stapler staple "${dmg_files[0]}"
+          xcrun stapler validate "${dmg_files[0]}"
+          hdiutil verify "${dmg_files[0]}"
+          spctl --assess \
+            --type open \
+            --context context:primary-signature \
+            --verbose=4 \
+            "${dmg_files[0]}"
+
+          rm -rf "$mount_point"
+          mkdir -p "$mount_point"
+          hdiutil attach "${dmg_files[0]}" \
+            -readonly \
+            -nobrowse \
+            -mountpoint "$mount_point"
+          mounted=true
+
+          distributed_app="$mount_point/Ohayo.app"
+          test -x "$distributed_app/Contents/MacOS/Ohayo"
+          codesign --verify --deep --strict --verbose=2 "$distributed_app"
+          spctl --assess --type execute --verbose=4 "$distributed_app"
+
+          "$distributed_app/Contents/MacOS/Ohayo" >"$smoke_log" 2>&1 &
+          smoke_pid=$!
+          sleep 3
+          if ! kill -0 "$smoke_pid" 2>/dev/null; then
+            wait "$smoke_pid" || smoke_status=$?
+            cat "$smoke_log"
+            echo "::error::Ohayo encerrou durante o smoke (status ${smoke_status:-0})" >&2
+            exit 1
+          fi
+          kill "$smoke_pid"
+          wait "$smoke_pid" 2>/dev/null || true
+          smoke_pid=""
+          hdiutil detach "$mount_point"
+          mounted=false
+      - name: Remove signing material
+        if: always() && steps.credentials.outputs.signing_enabled == 'true'
+        run: |
+          if [[ -n "${OHAYO_SIGNING_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$OHAYO_SIGNING_KEYCHAIN" || true
+          fi
+          rm -f \
+            "$RUNNER_TEMP/ohayo-developer-id.p12" \
+            "$RUNNER_TEMP/ohayo-notarization-result.json"
       - uses: softprops/action-gh-release@v2
         with:
           files: build/Ohayo-*.dmg

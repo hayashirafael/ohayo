@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HistoryTab: View {
     @ObservedObject var state: AppState
+    @State private var showsClearConfirmation = false
     private var strings: L10n { state.strings }
 
     var body: some View {
@@ -9,6 +10,17 @@ struct HistoryTab: View {
             if state.history.isEmpty { emptyState } else { historyList }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .confirmationDialog(
+            strings.clearHistoryConfirmationTitle,
+            isPresented: $showsClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(strings.clearHistoryAction, role: .destructive) {
+                state.clearHistory()
+            }
+        } message: {
+            Text(strings.clearHistoryConfirmationBody)
+        }
     }
 
     private var emptyState: some View {
@@ -35,20 +47,29 @@ struct HistoryTab: View {
     private var historyList: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
-                if let filter = state.accountFilter {
-                    HStack {
-                        Label(strings.filteredBy(state.label(for: filter)),
-                              systemImage: "line.3.horizontal.decrease.circle")
-                            .font(.caption)
-                        Spacer()
-                        Button { state.accountFilter = nil } label: {
-                            Image(systemName: "xmark.circle.fill")
+                HStack {
+                    if let filter = state.accountFilter {
+                        HStack(spacing: 5) {
+                            Label(strings.filteredBy(state.label(for: filter)),
+                                  systemImage: "line.3.horizontal.decrease.circle")
+                                .font(.caption)
+                            Button { state.accountFilter = nil } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain)
+                            .help(strings.clearFilter)
                         }
-                        .buttonStyle(.plain)
-                        .help(strings.clearFilter)
                     }
-                    .padding(.bottom, 2)
+                    Spacer()
+                    Button(role: .destructive) {
+                        showsClearConfirmation = true
+                    } label: {
+                        Label(strings.clearHistory, systemImage: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
                 }
+                .padding(.bottom, 2)
                 ForEach(Array(visibleHistory.enumerated()), id: \.offset) { _, event in
                     card(event)
                 }
@@ -183,6 +204,7 @@ struct HistoryTab: View {
     private func statusTitle(_ event: FireEvent) -> String {
         switch event.result {
         case .success: return strings.historySuccess
+        case .launched: return strings.historyLaunched
         case .failure: return strings.historyFailure
         case .skipped: return strings.historySkipped
         case .missed: return strings.historyMissed
@@ -192,6 +214,7 @@ struct HistoryTab: View {
     private func statusSymbol(_ event: FireEvent) -> String {
         switch event.result {
         case .success: return "checkmark.circle.fill"
+        case .launched: return "terminal.fill"
         case .failure: return "xmark.circle.fill"
         case .skipped: return "arrow.uturn.right.circle.fill"
         case .missed: return "moon.zzz.fill"
@@ -201,6 +224,7 @@ struct HistoryTab: View {
     private func statusColor(_ event: FireEvent) -> Color {
         switch event.result {
         case .success: return .green
+        case .launched: return .blue
         case .failure: return .red
         case .skipped: return .secondary
         case .missed: return .orange
@@ -211,6 +235,8 @@ struct HistoryTab: View {
         switch event.result {
         case .success:
             return strings.historyExecutedSuccessfully
+        case .launched:
+            return strings.historyTerminalLaunched
         case .failure(let message):
             return message
         case .skipped(let until):
