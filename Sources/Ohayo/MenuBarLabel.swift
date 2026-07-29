@@ -1,5 +1,20 @@
 import SwiftUI
 
+enum MenuBarLabelLogic {
+    static func soonestActiveWindowEnd(
+        in snapshot: RenewalSnapshot,
+        after now: Date
+    ) -> Date? {
+        snapshot.byTask.values.compactMap { entry in
+            guard case .scheduled(let end) = entry.phase,
+                  end > now else {
+                return nil
+            }
+            return end
+        }.min()
+    }
+}
+
 /// Label da barra: glifo próprio (balão + arco de renovação) preenchido quando
 /// qualquer conta está com janela ativa; exclamação em erro; esmaecido quando
 /// pausado. Texto opcional = janela que vence primeiro entre as contas em
@@ -21,7 +36,10 @@ struct MenuBarLabel: View {
     }
 
     private var soonestEnd: Date? {
-        state.nextRenewals.values.filter { $0 > Date() }.min()
+        MenuBarLabelLogic.soonestActiveWindowEnd(
+            in: state.renewalSnapshot,
+            after: Date()
+        )
     }
 
     private var glyphState: MenuBarGlyph.State {

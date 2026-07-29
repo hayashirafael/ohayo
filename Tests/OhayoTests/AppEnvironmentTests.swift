@@ -7,7 +7,22 @@ import XCTest
 @MainActor
 final class AppEnvironmentTests: XCTestCase {
     private struct NoopTerminalLauncher: TerminalLaunching {
-        func launch(_ message: Message) async -> Result<Void, RunnerError> { .success(()) }
+        func launch(
+            _ dispatch: PreparedDispatch
+        ) async -> Result<Void, RunnerError> {
+            .success(())
+        }
+    }
+
+    private final class CountingTerminalLauncher: TerminalLaunching {
+        private(set) var calls = 0
+
+        func launch(
+            _ dispatch: PreparedDispatch
+        ) async -> Result<Void, RunnerError> {
+            calls += 1
+            return .success(())
+        }
     }
 
     private final class BlockingTerminalLauncher: TerminalLaunching {
@@ -17,7 +32,7 @@ final class AppEnvironmentTests: XCTestCase {
         private var release: CheckedContinuation<Void, Never>?
 
         func launch(
-            _ message: Message
+            _ dispatch: PreparedDispatch
         ) async -> Result<Void, RunnerError> {
             calls += 1
             entered = true
@@ -35,6 +50,36 @@ final class AppEnvironmentTests: XCTestCase {
         func finish() {
             release?.resume()
             release = nil
+        }
+    }
+
+    private final class SequencedBlockingTerminalLauncher:
+        TerminalLaunching {
+        private(set) var calls = 0
+        var onCall: ((Int) -> Void)?
+        private var releases:
+            [Int: CheckedContinuation<Void, Never>] = [:]
+
+        func launch(
+            _ dispatch: PreparedDispatch
+        ) async -> Result<Void, RunnerError> {
+            calls += 1
+            let call = calls
+            onCall?(call)
+            await withCheckedContinuation { continuation in
+                releases[call] = continuation
+            }
+            return .success(())
+        }
+
+        func finish(call: Int) {
+            releases.removeValue(forKey: call)?.resume()
+        }
+
+        func finishAll() {
+            let pending = Array(releases.values)
+            releases.removeAll()
+            pending.forEach { $0.resume() }
         }
     }
 
@@ -85,6 +130,8 @@ final class AppEnvironmentTests: XCTestCase {
     }
 
     private func drain(_ env: AppEnvironment) async {
+        await env.reconfigureTask?.value
+        await env.wakeTask?.value
         await env.reconfigureTask?.value
     }
 
@@ -169,6 +216,193 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertEqual(launcher.calls, 1)
     }
 
+    func testRecoveryTardioNaoRessuscitaSidecarAposDesabilitarDuranteDispatch()
+        async {
+        let clock = MutableClock(date(2099, 7, 9, 12, 39))
+        let state = AppState(defaults: freshDefaults())
+        let scheduler = TaskScheduler(clock: clock, calendar: cal)
+        let detector = MockDetector()
+        let launcher = SequencedBlockingTerminalLauncher()
+        let continuousDispatch = expectation(
+            description: "dispatch contínuo entrou no launcher"
+        )
+        let fixedDispatch = expectation(
+            description: "reconfigure novo ficou suspenso na agenda"
+        )
+        launcher.onCall = { call in
+            if call == 1 {
+                continuousDispatch.fulfill()
+            } else if call == 2 {
+                fixedDispatch.fulfill()
+            }
+        }
+        let env = AppEnvironment(
+            state: state,
+            taskScheduler: scheduler,
+            detector: detector,
+            terminalLauncher: launcher,
+            authenticationChecker: AllowAllAuthenticationChecker(),
+            probeCLIs: false
+        )
+        activeScheduler = scheduler
+        defer { launcher.finishAll() }
+        await drain(env)
+
+        var continuous = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        continuous.bootstrapWhenInactive = true
+        state.tasks = [continuous]
+        let oldReconfigure = try! XCTUnwrap(env.reconfigureTask)
+        await fulfillment(of: [continuousDispatch], timeout: 1)
+        XCTAssertEqual(launcher.calls, 1)
+        XCTAssertNotNil(state.renewalRecoveryState(for: continuous))
+
+        var disabled = continuous
+        disabled.enabled = false
+        clock.now = date(2099, 7, 9, 12, 40)
+        let fixed = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultCodexMessage,
+            repetition: .fixed,
+            times: [12 * 60 + 40],
+            weekdays: Set(1...7)
+        )
+        state.tasks = [disabled, fixed]
+        let newestReconfigure = try! XCTUnwrap(env.reconfigureTask)
+        await fulfillment(of: [fixedDispatch], timeout: 1)
+        XCTAssertEqual(launcher.calls, 2)
+        XCTAssertNil(state.renewalRecoveryState(for: continuous))
+
+        launcher.finish(call: 1)
+        await oldReconfigure.value
+
+        XCTAssertEqual(launcher.calls, 2)
+        XCTAssertNil(state.renewalRecoveryState(for: continuous))
+
+        launcher.finish(call: 2)
+        await newestReconfigure.value
+
+        XCTAssertEqual(launcher.calls, 2)
+        XCTAssertNil(state.renewalRecoveryState(for: continuous))
+        XCTAssertNil(state.renewalSnapshot[continuous.uid])
+    }
+
+    func testEdicaoDuranteDispatchPersisteLeaseSemOutcomeAntigoEAposRestart()
+        async {
+        let defaults = freshDefaults()
+        let state = AppState(defaults: defaults)
+        let scheduler = TaskScheduler()
+        let detector = MockDetector()
+        let launcher = SequencedBlockingTerminalLauncher()
+        let dispatchEntered = expectation(
+            description: "dispatch contínuo entrou no launcher"
+        )
+        launcher.onCall = { call in
+            if call == 1 {
+                dispatchEntered.fulfill()
+            }
+        }
+        let env = AppEnvironment(
+            state: state,
+            taskScheduler: scheduler,
+            detector: detector,
+            terminalLauncher: launcher,
+            authenticationChecker: AllowAllAuthenticationChecker(),
+            probeCLIs: false
+        )
+        activeScheduler = scheduler
+        defer { launcher.finishAll() }
+        await drain(env)
+
+        var original = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
+        )
+        original.bootstrapWhenInactive = true
+        state.tasks = [original]
+        let oldReconfigure = try! XCTUnwrap(env.reconfigureTask)
+        await fulfillment(of: [dispatchEntered], timeout: 1)
+        XCTAssertEqual(launcher.calls, 1)
+        guard case .cooldown =
+                state.renewalRecoveryState(for: original) else {
+            return XCTFail("esperava lease inicial do hand-off")
+        }
+
+        var edited = original
+        var editedCommand = original.resolvedCommand
+        editedCommand.text = "2+2"
+        edited.command = editedCommand
+        XCTAssertNotEqual(edited.renewalRevision, original.renewalRevision)
+
+        state.tasks = [edited]
+        await env.reconfigureTask?.value
+        XCTAssertEqual(launcher.calls, 1)
+        guard case .cooldown =
+                state.renewalRecoveryState(for: edited) else {
+            return XCTFail("edição deve preservar a lease conservadora")
+        }
+        XCTAssertEqual(
+            state.renewalSnapshot[edited.uid]?.phase,
+            .dispatching
+        )
+
+        launcher.finish(call: 1)
+        await oldReconfigure.value
+
+        XCTAssertEqual(launcher.calls, 1)
+        guard case .cooldown(
+            let leaseNotBefore,
+            let bootstrapOrigin
+        ) = state.renewalRecoveryState(for: edited) else {
+            return XCTFail("lease stale deve ser atualizada na revisão corrente")
+        }
+        XCTAssertTrue(bootstrapOrigin)
+        XCTAssertEqual(
+            state.renewalSnapshot[edited.uid]?.phase,
+            .cooldown(
+                leaseNotBefore,
+                bootstrapOrigin: bootstrapOrigin
+            )
+        )
+
+        let reloaded = AppState(defaults: defaults)
+        let persistedTask = try! XCTUnwrap(
+            reloaded.tasks.first { $0.uid == edited.uid }
+        )
+        XCTAssertEqual(
+            reloaded.renewalRecoveryState(for: persistedTask),
+            .cooldown(
+                notBefore: leaseNotBefore,
+                bootstrapOrigin: bootstrapOrigin
+            )
+        )
+        let restartedLauncher = CountingTerminalLauncher()
+        let restartedScheduler = TaskScheduler()
+        activeScheduler = restartedScheduler
+        let restarted = AppEnvironment(
+            state: reloaded,
+            taskScheduler: restartedScheduler,
+            detector: MockDetector(),
+            terminalLauncher: restartedLauncher,
+            authenticationChecker: AllowAllAuthenticationChecker(),
+            probeCLIs: false
+        )
+        await drain(restarted)
+
+        XCTAssertEqual(restartedLauncher.calls, 0)
+        XCTAssertEqual(
+            reloaded.renewalSnapshot[persistedTask.uid]?.phase,
+            .cooldown(
+                leaseNotBefore,
+                bootstrapOrigin: bootstrapOrigin
+            )
+        )
+    }
+
     func testContaContinuaVoltaSozinhaQuandoPastaReaparece() async throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory
@@ -201,7 +435,7 @@ final class AppEnvironmentTests: XCTestCase {
         task.bootstrapWhenInactive = false
         state.tasks = [task]
         await drain(env)
-        XCTAssertTrue(state.nextRenewals.isEmpty)
+        XCTAssertTrue(state.renewalSnapshot.nextByAccount.isEmpty)
 
         try fm.createDirectory(
             at: account.appendingPathComponent("projects"),
@@ -212,7 +446,14 @@ final class AppEnvironmentTests: XCTestCase {
 
         let canonical =
             ProviderAccountContext.canonicalAccountDirectory(account)
-        XCTAssertEqual(state.nextRenewals[canonical], expectedEnd)
+        XCTAssertEqual(
+            state.renewalSnapshot[task.uid],
+            RenewalSnapshot.Entry(
+                taskID: task.uid,
+                account: canonical,
+                phase: .scheduled(expectedEnd)
+            )
+        )
     }
 
     /// Regressão do bug "menu não atualiza a próxima schedule": o tick periódico
@@ -230,50 +471,51 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertNotEqual(state.uiHeartbeat, antes)
     }
 
-    func testRefreshWindowEndsPublicaFimDeJanelaPorContaAgendada() async {
-        let defaults = UserDefaults(suiteName: "ohayo-test-\(UUID().uuidString)")!
-        let state = AppState(defaults: defaults)
-        var task = ScheduledTask(uid: UUID(), command: AppState.defaultMessage)
-        task.repetition = .fixed // sem times: nenhum timer arma
+    func testCicloContinuoPublicaQuotaIndisponivelSemInventarPrazo() async throws {
+        let account = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohayo-quota-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: account,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: account) }
+
+        let state = AppState(defaults: freshDefaults())
+        var command = AppState.defaultMessage
+        command.configDir = account.path
+        var task = ScheduledTask(
+            uid: UUID(),
+            command: command,
+            repetition: .continuous
+        )
+        task.bootstrapWhenInactive = false
         state.tasks = [task]
         let detector = MockDetector()
-        let end = Date().addingTimeInterval(3600)
-        detector.end = end
-        let env = AppEnvironment(state: state, taskScheduler: TaskScheduler(),
-                                 detector: detector, probeCLIs: false)
-        await env.refreshWindowEnds()
-        XCTAssertEqual(state.windowEnds[AppState.defaultConfigDir.standardizedFileURL], end)
-
-        // Janela que sumiu (nil) sai do dicionário no próximo refresh.
-        detector.end = nil
-        await env.refreshWindowEnds()
-        XCTAssertTrue(state.windowEnds.isEmpty)
-    }
-
-    func testRefreshWindowEndsPublicaQuotaIndisponivelSemInventarJanela() async {
-        let defaults = UserDefaults(suiteName: "ohayo-test-\(UUID().uuidString)")!
-        let state = AppState(defaults: defaults)
-        state.tasks = [
-            ScheduledTask(uid: UUID(), command: AppState.defaultMessage)
-        ]
-        let detector = MockDetector()
         detector.stateOverride = .unavailable(reason: "schema changed")
+        let scheduler = TaskScheduler()
         let env = AppEnvironment(
             state: state,
-            taskScheduler: TaskScheduler(),
+            taskScheduler: scheduler,
             detector: detector,
             probeCLIs: false
         )
+        activeScheduler = scheduler
 
-        await env.refreshWindowEnds()
+        await drain(env)
 
-        XCTAssertTrue(state.windowEnds.isEmpty)
+        let canonical =
+            ProviderAccountContext.canonicalAccountDirectory(account)
         XCTAssertEqual(
-            state.quotaUnavailableReasons[
-                AppState.defaultConfigDir.standardizedFileURL
-            ],
+            state.renewalSnapshot[task.uid]?.phase,
+            .quotaUnavailable("schema changed")
+        )
+        XCTAssertNil(state.renewalSnapshot.nextByAccount[canonical])
+        XCTAssertEqual(
+            state.renewalSnapshot.quotaUnavailableReasons[canonical],
             "schema changed"
         )
+        XCTAssertEqual(detector.lastAccount, canonical)
+        XCTAssertEqual(detector.lastProvider, .claude)
     }
 
     /// Disparo manual do botão "Executar agora": comando padrão (Claude,
@@ -415,39 +657,10 @@ final class AppEnvironmentTests: XCTestCase {
         await drain(env)
 
         XCTAssertTrue(state.history.isEmpty)
-    }
-
-    func testBootstrapJaEnfileiradoRevalidaOptOutAntesDoDispatch() async {
-        let detector = MockDetector()
-        let launcher = MockTerminalLauncher()
-        let state = AppState(defaults: freshDefaults())
-        var task = ScheduledTask(
-            uid: UUID(),
-            command: AppState.defaultMessage,
-            repetition: .continuous
+        XCTAssertEqual(
+            state.renewalSnapshot[task.uid]?.phase,
+            .waitingForWindow
         )
-        task.bootstrapWhenInactive = false
-        state.tasks = [task]
-        let scheduler = TaskScheduler()
-        activeScheduler = scheduler
-        let env = AppEnvironment(
-            state: state,
-            taskScheduler: scheduler,
-            detector: detector,
-            terminalLauncher: launcher,
-            authenticationChecker: AllowAllAuthenticationChecker(),
-            probeCLIs: false
-        )
-        await drain(env)
-
-        let outcome = await env.dispatchRenewal(
-            account: AppState.defaultConfigDir,
-            trigger: .bootstrap
-        )
-
-        XCTAssertEqual(outcome, .paused)
-        XCTAssertEqual(launcher.calls, 0)
-        XCTAssertTrue(state.history.isEmpty)
     }
 
     func testContinuoComOptInFazBootstrapSemJanelaAtiva() async {
@@ -537,6 +750,14 @@ final class AppEnvironmentTests: XCTestCase {
         await drain(env)
 
         XCTAssertTrue(state.history.isEmpty)
+        XCTAssertEqual(
+            state.renewalSnapshot[optOut.uid]?.phase,
+            .conflict
+        )
+        XCTAssertEqual(
+            state.renewalSnapshot[optIn.uid]?.phase,
+            .conflict
+        )
     }
 
     func testRestartImediatoNaoRepeteBootstrapPersistido() async {
@@ -611,13 +832,20 @@ final class AppEnvironmentTests: XCTestCase {
 
         XCTAssertEqual(runner.calls, 1)
         guard case .retry(let retryAt, let attempt, let bootstrapOrigin) =
-                state.renewalRecoveryState(for: task) else {
-            return XCTFail("esperava retry persistido")
+                state.renewalSnapshot[task.uid]?.phase else {
+            return XCTFail("esperava retry publicado no snapshot")
         }
         XCTAssertEqual(attempt, 1)
         XCTAssertTrue(bootstrapOrigin)
         XCTAssertGreaterThan(retryAt, Date())
-        XCTAssertFalse(state.shouldBootstrap(task))
+        XCTAssertEqual(
+            state.renewalRecoveryState(for: task),
+            .retry(
+                notBefore: retryAt,
+                attempt: 1,
+                bootstrapOrigin: true
+            )
+        )
 
         let reloaded = AppState(defaults: defaults)
         let persistedTask = try! XCTUnwrap(reloaded.tasks.first)
@@ -648,8 +876,12 @@ final class AppEnvironmentTests: XCTestCase {
 
         XCTAssertEqual(restartedRunner.calls, 0)
         XCTAssertEqual(
-            reloaded.nextRenewals[AppState.defaultConfigDir.standardizedFileURL],
-            retryAt
+            reloaded.renewalSnapshot[persistedTask.uid]?.phase,
+            .retry(
+                retryAt,
+                attempt: 1,
+                bootstrapOrigin: true
+            )
         )
     }
 }

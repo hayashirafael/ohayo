@@ -2,7 +2,9 @@ import AppKit
 import Foundation
 
 protocol TerminalLaunching {
-    func launch(_ message: Message) async -> Result<Void, RunnerError>
+    func launch(
+        _ dispatch: PreparedDispatch
+    ) async -> Result<Void, RunnerError>
 }
 
 struct TerminalLaunchSpec: Equatable {
@@ -26,13 +28,32 @@ struct TerminalLauncher: TerminalLaunching {
     var defaultWorkspaceOverride: URL?
     var appleScriptRunner: (String) -> Result<Void, RunnerError> = Self.runAppleScript
 
-    func launch(_ message: Message) async -> Result<Void, RunnerError> {
+    func launch(
+        _ dispatch: PreparedDispatch
+    ) async -> Result<Void, RunnerError> {
+        let plan: ProviderDispatchPlan?
+        if case .provider(let providerPlan) = dispatch.target {
+            plan = providerPlan
+        } else {
+            plan = nil
+        }
+        return await launch(
+            dispatch.message,
+            preparedPlan: plan
+        )
+    }
+
+    private func launch(
+        _ message: Message,
+        preparedPlan: ProviderDispatchPlan?
+    ) async -> Result<Void, RunnerError> {
         Self.cleanupStaleScripts()
         guard let spec = Self.spec(
             for: message,
             claudeBinary: claudeBinaryOverride,
             codexBinary: codexBinaryOverride,
-            defaultWorkspace: defaultWorkspaceOverride
+            defaultWorkspace: defaultWorkspaceOverride,
+            preparedPlan: preparedPlan
         ) else {
             return .failure(.cliNotFound(message.kind == .codex ? .codex : .claude))
         }
@@ -111,29 +132,18 @@ struct TerminalLauncher: TerminalLaunching {
     static func spec(for message: Message,
                      claudeBinary: URL? = nil,
                      codexBinary: URL? = nil,
-                     defaultWorkspace: URL? = nil) -> TerminalLaunchSpec? {
+                     defaultWorkspace: URL? = nil,
+                     preparedPlan: ProviderDispatchPlan? = nil)
+        -> TerminalLaunchSpec? {
         let provider: Provider
         let binary: URL?
-        var args: [String] = []
         switch message.kind {
         case .claude:
             provider = .claude
             binary = claudeBinary ?? CommandRunner.locate(.claude)
-            args = ["--model", message.resolvedModel.cliValue,
-                    "--effort", message.resolvedEffort.rawValue]
-            if message.resolvedSafeMode { args.append("--safe-mode") }
-            args.append(message.resolvedPromptText)
         case .codex:
             provider = .codex
             binary = codexBinary ?? CommandRunner.locate(.codex)
-            if let model = message.codexModel, !model.isEmpty {
-                args += ["--model", model]
-            }
-            args += ["--sandbox", "read-only"]
-            if let reasoning = message.codexReasoning {
-                args += ["-c", "model_reasoning_effort=\"\(reasoning.rawValue)\""]
-            }
-            args.append(message.resolvedPromptText)
         case .shell:
             return nil
         }
@@ -154,9 +164,14 @@ struct TerminalLauncher: TerminalLaunching {
 
         let messageConfigDir = (message.configDir?.isEmpty == false)
             ? URL(fileURLWithPath: message.configDir!) : nil
-        let account = ProviderAccountContext(
+        let account = preparedPlan?.account ?? ProviderAccountContext(
             provider: provider, configDirectory: messageConfigDir
         )
+        let args = preparedPlan?.terminalArguments
+            ?? ProviderDispatchPlan(
+                message: message,
+                account: account
+            ).terminalArguments
         let envValue = account.configDirectory.path
         // Sem `export PATH`: o Terminal abre um login shell com o PATH do
         // próprio usuário, e o binário é invocado por caminho absoluto —
