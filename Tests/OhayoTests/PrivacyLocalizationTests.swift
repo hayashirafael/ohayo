@@ -16,7 +16,7 @@ final class PrivacyLocalizationTests: XCTestCase {
             strings.showSensitiveNotificationDetails,
             "Show sensitive details in notifications"
         )
-        XCTAssertEqual(strings.genericNotificationFailureTitle, "Ohayo task failed")
+        XCTAssertEqual(strings.genericNotificationFailureTitle, "Ohayo schedule failed")
         XCTAssertEqual(
             strings.genericNotificationFailureBody,
             "Open History in Ohayo to see the error details."
@@ -26,7 +26,7 @@ final class PrivacyLocalizationTests: XCTestCase {
             strings.genericNotificationResponseBody,
             "Open History in Ohayo to read the response."
         )
-        XCTAssertEqual(strings.genericNotificationSuccessTitle, "Ohayo task completed")
+        XCTAssertEqual(strings.genericNotificationSuccessTitle, "Ohayo schedule completed")
         XCTAssertEqual(
             strings.genericNotificationSuccessBody,
             "Open History in Ohayo to see the run details."
@@ -66,7 +66,7 @@ final class PrivacyLocalizationTests: XCTestCase {
             strings.showSensitiveNotificationDetails,
             "Mostrar detalhes sensíveis nas notificações"
         )
-        XCTAssertEqual(strings.genericNotificationFailureTitle, "Tarefa do Ohayo falhou")
+        XCTAssertEqual(strings.genericNotificationFailureTitle, "Agendamento do Ohayo falhou")
         XCTAssertEqual(
             strings.genericNotificationFailureBody,
             "Abra o Histórico no Ohayo para ver os detalhes do erro."
@@ -76,7 +76,10 @@ final class PrivacyLocalizationTests: XCTestCase {
             strings.genericNotificationResponseBody,
             "Abra o Histórico no Ohayo para ler a resposta."
         )
-        XCTAssertEqual(strings.genericNotificationSuccessTitle, "Tarefa do Ohayo concluída")
+        XCTAssertEqual(
+            strings.genericNotificationSuccessTitle,
+            "Agendamento do Ohayo concluído"
+        )
         XCTAssertEqual(
             strings.genericNotificationSuccessBody,
             "Abra o Histórico no Ohayo para ver os detalhes da execução."

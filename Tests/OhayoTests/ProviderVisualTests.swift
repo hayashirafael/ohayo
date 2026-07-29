@@ -63,6 +63,22 @@ final class ProviderVisualTests: XCTestCase {
         XCTAssertNil(restored.skill)
         XCTAssertNil(restored.account)
         XCTAssertNil(restored.codexReasoning)
+        XCTAssertFalse(AgendamentoFormSheet.hasAdvancedConfiguration(restored))
+    }
+
+    func testFormularioExpandeOpcoesAvancadasQuandoHaOverridePersistido() {
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "x",
+                kind: .codex,
+                timeoutSeconds: 60,
+                codexReasoning: .high
+            )
+        )
+        let restored = AgendamentoFormSheet.restoredState(for: task)
+
+        XCTAssertTrue(AgendamentoFormSheet.hasAdvancedConfiguration(restored))
     }
 
     func testRestoredStateDistingueReasoningPadraoDeLowExplicito() {

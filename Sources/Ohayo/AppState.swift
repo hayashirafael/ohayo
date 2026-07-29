@@ -232,10 +232,14 @@ final class AppState: ObservableObject {
     var strings: L10n { L10n(language: language) }
 
     /// Seção selecionada na janela de Configurações (deep-link a partir do menu).
-    @Published var settingsSection: SettingsSection = .contas
+    @Published var settingsSection: SettingsSection = .horarios
 
     /// Filtro de conta para as abas Tarefas/Histórico (deep-link do painel).
     @Published var accountFilter: URL?
+
+    /// Pedido efêmero para apresentar o formulário de novo Agendamento após
+    /// um deep-link (por exemplo, o CTA do painel da barra).
+    @Published var newScheduleRequest: UUID?
 
     func matchesFilter(_ event: FireEvent) -> Bool {
         guard let filter = accountFilter else { return true }

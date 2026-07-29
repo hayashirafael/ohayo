@@ -8,17 +8,16 @@ struct GeneralTab: View {
 
     var body: some View {
         Form {
-            Section {
+            Section(sectionTitle(en: "Startup", pt: "Inicialização")) {
                 if loginItem.isSupported {
                     Toggle(strings.launchAtLogin, isOn: Binding(
                         get: { loginItem.isEnabled },
                         set: { loginItem.setEnabled($0) }))
                 }
+            }
+
+            Section {
                 Toggle(strings.remainingInMenuBar, isOn: $state.showRemainingInBar)
-                Toggle(
-                    strings.showSensitiveNotificationDetails,
-                    isOn: $state.showSensitiveNotificationDetails
-                )
                 Stepper(value: $state.panelUpcomingCount, in: 1...5) {
                     HStack {
                         Text(strings.panelUpcomingCountLabel)
@@ -28,28 +27,48 @@ struct GeneralTab: View {
                             .monospacedDigit()
                     }
                 }
+            } header: {
+                Text(sectionTitle(en: "Menu Bar", pt: "Barra de Menus"))
+            } footer: {
+                Text(strings.remainingInMenuBarFooter)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section(sectionTitle(en: "Notifications", pt: "Notificações")) {
+                Toggle(
+                    strings.showSensitiveNotificationDetails,
+                    isOn: $state.showSensitiveNotificationDetails
+                )
+            }
+
+            Section(sectionTitle(en: "Language", pt: "Idioma")) {
                 Picker(strings.languageLabel, selection: $state.language) {
                     ForEach(AppLanguage.allCases) { language in
                         Text(language.pickerTitle).tag(language)
                     }
                 }
-            } footer: {
-                Text(strings.remainingInMenuBarFooter)
-                    .font(.caption).foregroundStyle(.secondary)
             }
-            Section {
-                LabeledContent(strings.version) {
-                    Text(AppVersion.current)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
+
+            Section(sectionTitle(en: "System Access", pt: "Acesso ao Sistema")) {
                 Button {
                     openWindow(id: "permissions")
                 } label: {
                     Label(strings.permissionsSettingsButton, systemImage: "checklist")
                 }
             }
+
+            Section(sectionTitle(en: "About", pt: "Sobre")) {
+                LabeledContent(strings.version) {
+                    Text(AppVersion.current)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
         }
         .formStyle(.grouped)
+    }
+
+    private func sectionTitle(en: String, pt: String) -> String {
+        state.language == .portuguese ? pt : en
     }
 }

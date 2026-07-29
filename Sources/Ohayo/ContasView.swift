@@ -9,9 +9,75 @@ struct ContasView: View {
     @State private var editingAlias: URL? = nil
     @State private var aliasDraft = ""
     @State private var invalidFolderAlert = false
+    @State private var pendingRemoval: URL? = nil
     private var strings: L10n { state.strings }
 
     var body: some View {
+        VStack(spacing: 0) {
+            Text(strings.accountsSubtitle)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.top, 14)
+
+            if state.discoverAccounts().isEmpty {
+                emptyState
+            } else {
+                accountsForm
+            }
+        }
+        .alert(strings.invalidFolderTitle, isPresented: $invalidFolderAlert) {
+            Button(strings.ok, role: .cancel) {}
+        } message: {
+            Text(strings.invalidFolderMessage)
+        }
+        .confirmationDialog(
+            pendingRemoval.map { strings.removeAccountConfirmationTitle(state.label(for: $0)) }
+                ?? strings.removeAccountHelp,
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingRemoval
+        ) { dir in
+            Button(strings.removeAccount(state.label(for: dir)), role: .destructive) {
+                state.unregisterAccount(dir)
+                pendingRemoval = nil
+            }
+            Button(strings.cancel, role: .cancel) {}
+        } message: { dir in
+            Text(strings.removeAccountConfirmationBody(
+                scheduleCount: affectedScheduleCount(for: dir)
+            ))
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "person.crop.circle.badge.plus")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(.secondary)
+            Text(strings.noAccountsYet)
+                .font(.headline)
+            Text(strings.noAccountsDescription)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+            Button {
+                addAccount()
+            } label: {
+                Label(strings.addAccount, systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(40)
+    }
+
+    private var accountsForm: some View {
         Form {
             ForEach(Provider.allCases, id: \.self) { provider in
                 let accounts = state.accounts(for: provider)
@@ -28,13 +94,18 @@ struct ContasView: View {
                                 .font(.caption).foregroundStyle(.orange)
                         }
                         header(dir)
-                        LabeledContent(strings.providerLabel, value: state.provider(for: dir).displayName)
+                        LabeledContent(
+                            strings.providerLabel,
+                            value: state.provider(for: dir).displayName
+                        )
                         LabeledContent(strings.folderLabel) {
                             Text((dir.path as NSString).abbreviatingWithTildeInPath)
                                 .textSelection(.enabled)
                                 .foregroundStyle(.secondary)
                         }
-                        Text(scheduleCountText(dir)).font(.caption).foregroundStyle(.secondary)
+                        Text(scheduleCountText(dir))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     } header: {
                         if dir == accounts.first {
                             HStack(spacing: 6) {
@@ -45,6 +116,7 @@ struct ContasView: View {
                     }
                 }
             }
+
             Section {
                 Button {
                     addAccount()
@@ -58,11 +130,6 @@ struct ContasView: View {
             }
         }
         .formStyle(.grouped)
-        .alert(strings.invalidFolderTitle, isPresented: $invalidFolderAlert) {
-            Button(strings.ok, role: .cancel) {}
-        } message: {
-            Text(strings.invalidFolderMessage)
-        }
     }
 
     /// Abre o NSOpenPanel para cadastrar uma conta; pasta sem assinatura → alerta.
@@ -109,6 +176,10 @@ struct ContasView: View {
             }
             .buttonStyle(.plain)
             .help(state.isPaused(dir) ? strings.resumeAccount : strings.pauseAccount)
+            .accessibilityLabel(
+                "\(state.isPaused(dir) ? strings.resumeAccount : strings.pauseAccount): "
+                    + state.label(for: dir)
+            )
             Button {
                 if editingAlias == dir { commitAlias(dir) }
                 else { editingAlias = dir; aliasDraft = state.alias(for: dir) ?? "" }
@@ -116,18 +187,36 @@ struct ContasView: View {
                 Image(systemName: editingAlias == dir ? "checkmark" : "pencil")
             }
             .buttonStyle(.plain)
+            .help(
+                editingAlias == dir
+                    ? strings.saveAccountAlias(state.label(for: dir))
+                    : strings.editAccountAlias(state.label(for: dir))
+            )
+            .accessibilityLabel(
+                editingAlias == dir
+                    ? strings.saveAccountAlias(state.label(for: dir))
+                    : strings.editAccountAlias(state.label(for: dir))
+            )
             if state.registeredAccounts.contains(dir.standardizedFileURL.path) {
-                Button { state.unregisterAccount(dir) } label: {
+                Button { pendingRemoval = dir } label: {
                     Image(systemName: "minus.circle")
                 }
                 .buttonStyle(.plain)
                 .help(strings.removeAccountHelp)
+                .accessibilityLabel(strings.removeAccount(state.label(for: dir)))
             }
         }
     }
 
     private func scheduleCountText(_ dir: URL) -> String {
         strings.activeScheduleCount(state.activeScheduleCount(for: dir))
+    }
+
+    private func affectedScheduleCount(for dir: URL) -> Int {
+        let target = ProviderAccountContext.canonicalAccountDirectory(dir)
+        return state.tasks.filter {
+            state.intendedAccountDir(for: $0) == target
+        }.count
     }
 
     private func commitAlias(_ dir: URL) {

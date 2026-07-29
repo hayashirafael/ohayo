@@ -11,7 +11,7 @@ external dependencies.
 Claude plans (Pro/Max) open a 5-hour usage window from your first prompt. If
 you're a heavy user, you want that window already open when you sit down to
 work — not to burn its first hour warming up. Ohayo renews each account on
-its own, and continuous renewal never fires redundantly while a window is
+its own, and a continuous schedule never runs redundantly while a window is
 already active: it detects the current window passively from the local Claude
 Code transcripts, making no network calls of its own.
 
@@ -32,7 +32,7 @@ Code transcripts, making no network calls of its own.
   dirs are detected once, on first launch, and from then on you add accounts
   anytime via "Add account…" — shows the logged-in email, supports custom
   aliases
-- **History** — recent dispatches with status and expandable response (the
+- **History** — recent runs with status and expandable response (the
   captured stdout/stderr log on failures), including a distinct **Launched**
   state for interactive Terminal sessions; clear it at any time
 - **Private notifications by default** — macOS notifications hide prompt,
@@ -50,7 +50,7 @@ Code transcripts, making no network calls of its own.
 - macOS 13+ (the currently published v1.1.1 binary requires Apple Silicon;
   the next release produced by this revision is universal)
 - [Claude Code](https://claude.com/claude-code) installed and logged in
-  (only if you use Claude tasks)
+  (only if you use Claude schedules)
 - [Codex CLI](https://github.com/openai/codex) installed and logged in
   (optional, only for Codex accounts/commands)
 - To build from source: Swift 5.9+ (Xcode or Command Line Tools)
@@ -106,46 +106,50 @@ account has an active window, shows `!` on error, and fades when every
 scheduled account is paused; optionally it also shows the time until the
 soonest window expires.
 
-Clicking the icon opens a panel with the next tasks to fire across all
+Clicking the icon opens a panel with the next scheduled runs across all
 accounts — how many is configurable in **General** (1–5, default 1) —
 ordered by time; paused accounts are skipped, so it only shows what will
 actually run. The first is a highlight card, the rest compact rows: provider
-icon, account label, event name, and time. If there's nothing to show, the
+icon, account label, schedule name, and time. If there's nothing to show, the
 panel explains why (no active schedules, every account paused, or just
 waiting for the next window/time). Clicking a card or row opens
-**Settings → Tasks** filtered to that account. The footer has **Tasks**,
-**History** and **Settings…**; the header shows a warning if a CLI is
-missing, plus **Quit**.
+**Ohayo → Schedules** filtered to that account. The footer has **Schedules**,
+**History** and **Settings…**. A missing CLI becomes an actionable setup
+warning; Settings, Permissions, and **Quit Ohayo** are grouped under the
+secondary actions menu.
 
-**Settings** is a sidebar window with four sections:
+The operational **Ohayo** window opens on **Schedules** and has a sidebar
+with three sections:
 
 - **Accounts** — for each account, the logged-in identity / alias, provider
   with its icon, local folder, how many active schedules target it, and
   per-account **Pause/Resume**. Add or remove accounts here
-- **Tasks** — the single list of schedules. Each has a name, a type
+- **Schedules** — the single list of schedules. Each has a name, a type
   (Claude / Codex / shell command) with its own config, an account, and a
-  repetition — **Continuous** (a 5-hour-window renewal, max one per account)
+  repetition — **Continuous** (chains 5-hour windows, max one per account)
   or **Fixed times** (times × weekdays). One form creates or edits any of them;
-  new schedules start with an empty command field. Jumping in from a task in
+  new schedules start with an empty command field. Jumping in from a schedule in
   the menu panel filters this list to that account, with a chip to clear the
   filter
-- **Skill (optional):** for Claude/Codex tasks, pick a skill installed in the
+- **Skill (optional):** for Claude/Codex schedules, pick a skill installed in the
   target account, user scope, or selected repository. Ohayo resolves Claude
   account/plugin skills plus ancestor `.claude/skills`, and Codex account
   skills plus `$HOME/.agents/skills`, ancestor `.agents/skills`, and skills
   exposed by plugins that the selected account reports as installed and
   enabled through `codex plugin list --json`. The inventory check is
-  read-only and never runs a prompt. The dispatch prefixes the skill to the
-  prompt (`/skill message` for Claude, `$skill message` for Codex). Selecting
+  read-only and never runs a prompt. Each run prefixes the skill to the
+  command (`/skill command` for Claude, `$skill command` for Codex). Selecting
   a skill loads Claude customizations; the UI makes clear that this expands
   context and is not a filesystem sandbox
-- **History** — recent dispatches as cards with status, provider icon, model,
+- **History** — recent runs as cards with status, provider icon, model,
   account alias/email, command, response and error details; filterable by
-  account the same way as Tasks
-- **General** — Launch at Login, time remaining in the menu bar, sensitive
-  notification details (off by default), how many upcoming fires the menu
-  panel shows (1–5), Language (English or Portuguese), permissions, and the
-  app version
+  account the same way as Schedules
+
+General preferences live in the native **Settings…** window instead of the
+operational sidebar: Launch at Login, time remaining in the menu bar,
+sensitive notification details (off by default), how many upcoming runs the
+menu panel shows (1–5), Language (English or Portuguese), system access, and
+the app version.
 
 ### First-run permissions
 
@@ -155,7 +159,8 @@ correct login command when attention is needed. These checks are read-only:
 they never execute a prompt, start a login, or consume quota. You can also
 allow notifications, test the Terminal automation used for interactive
 sessions, and optionally enable Launch at Login. Closing the guide does not
-disable the app; reopen it from **Settings → General → Permissions…**.
+disable the app; reopen it from the menu panel’s secondary actions or
+**Settings… → System Access → Permissions…**.
 
 If notifications or Terminal automation were denied, change them in **System
 Settings → Notifications → Ohayo** or **System Settings → Privacy & Security →
@@ -163,7 +168,7 @@ Automation**, then reopen the guide to refresh or test the integration.
 
 ## How it works
 
-To manage continuous renewals, Ohayo streams the account's local transcripts
+To maintain Continuous Repetitions, Ohayo streams the account's local transcripts
 (`<account>/projects/**.jsonl` for Claude, `sessions/**.jsonl` for Codex,
 ordered by `mtime`) and reconstructs the current 5-hour window. It accepts only
 positive usage evidence: a real, non-error Claude assistant event with token
@@ -171,10 +176,10 @@ usage, or a Codex `token_count` event with positive `last_token_usage`.
 Synthetic/auth/model/network failures and zero-token events do not create a
 fictional window. Unreadable transcripts or an unknown usage schema become an
 explicit unavailable state and never trigger a bootstrap. If a window is
-active, only a redundant continuous renewal is skipped; fixed-time schedules
+active, only a redundant continuous run is skipped; fixed-time schedules
 always run.
 
-A Claude dispatch runs:
+A Claude run launches:
 
 ```
 claude -p --model <model> --effort <effort> [--safe-mode]
@@ -184,11 +189,11 @@ The prompt is written to stdin rather than exposed in the process argument
 list. The native Claude account deliberately runs with
 `CLAUDE_CONFIG_DIR` unset, because exporting `~/.claude` changes Claude Code's
 account semantics; custom Claude profiles receive the override. Codex receives
-the selected `CODEX_HOME`, defaulting to `~/.codex`. Shell tasks receive
+the selected `CODEX_HOME`, defaulting to `~/.codex`. Shell schedules receive
 neither provider variable.
 
-If the schedule has a skill, the prompt is prefixed before dispatch (`/skill
-message` for Claude, `$skill message` for Codex). For Claude this requires
+If the schedule has a skill, the prompt is prefixed before the run (`/skill
+command` for Claude, `$skill command` for Codex). For Claude this requires
 customizations to be loaded; “ignore Claude customizations” is not presented
 as a sandbox.
 
@@ -207,7 +212,7 @@ External `CLAUDE.md` imports are never pre-approved either; their consent also
 remains visible.
 
 The built-in Claude defaults — Haiku, low effort, ignored customizations and
-`1+1` — provide a minimal renewal prompt. A batch Codex dispatch runs `codex
+`1+1` — provide a minimal command for Continuous Repetition. A batch Codex run launches `codex
 exec [--model <model>] --sandbox read-only [-c
 model_reasoning_effort=<effort>]`; its prompt also comes from stdin. When model
 or reasoning is set to **Account default**, Ohayo omits the corresponding flag
@@ -227,7 +232,7 @@ in this order: a `.claude.json` means Claude; else an `auth.json` means Codex;
 else a `projects/` subfolder means Claude; else a `sessions/` subfolder means
 Codex. The provider of a registered custom account is also persisted, so a
 temporarily missing or ambiguous folder is not reinterpreted as another
-provider; dispatch and quota checks receive that identity explicitly.
+provider; run and quota checks receive that identity explicitly.
 Existing account folders use their canonical filesystem path as identity.
 Registering or selecting a symlink to the same Claude/Codex account therefore
 does not create another queue, schedule, pause state or quota cooldown.
@@ -248,8 +253,8 @@ cancels bootstrap work.
 After a window is detected, Ohayo arms at its end and chains the next one; a
 redundant attempt is skipped while the account window is active.
 Schedules created by older Ohayo versions remain waiting until you edit them
-and explicitly enable this option. A **Fixed times** schedule always fires at
+and explicitly enable this option. A **Fixed times** schedule always runs at
 its times × weekdays, in either batch or interactive mode. On wake, fixed times
-fire at most once to catch up the most recent occurrence missed — a long sleep
-never triggers a burst of backlogged fires, and launch itself never replays
+runs at most once to catch up the most recent occurrence missed — a long sleep
+never triggers a burst of backlogged runs, and launch itself never replays
 occurrences missed before it.

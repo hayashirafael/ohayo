@@ -12,10 +12,12 @@ final class MockDetector: SessionDetecting {
     var stateOverride: QuotaWindowState?
     var lastAccount: URL?
     var lastProvider: Provider?
+    var calls = 0
     func quotaWindowState(
         account: URL,
         provider: Provider
     ) async -> QuotaWindowState {
+        calls += 1
         lastAccount = account
         lastProvider = provider
         if let stateOverride { return stateOverride }

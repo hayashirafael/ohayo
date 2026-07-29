@@ -6,6 +6,7 @@ struct PermissionSetupView: View {
     @StateObject private var model: PermissionSetupModel
     @StateObject private var doctorModel: ProviderDoctorModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
     private var strings: L10n { state.strings }
 
     init(
@@ -56,10 +57,18 @@ struct PermissionSetupView: View {
                 Spacer()
                 Button(strings.configureLater) { closeGuide() }
                     .keyboardShortcut(.cancelAction)
+                Button(strings.openSchedules) { continueToSchedules() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
-        .frame(width: 600, height: 640)
+        .frame(
+            minWidth: 560,
+            idealWidth: 620,
+            minHeight: 560,
+            idealHeight: 680
+        )
         .task { await model.refresh() }
         .onDisappear { state.dismissPermissionGuide() }
     }
@@ -82,6 +91,14 @@ struct PermissionSetupView: View {
 
     private func closeGuide() {
         state.dismissPermissionGuide()
+        dismiss()
+    }
+
+    private func continueToSchedules() {
+        state.dismissPermissionGuide()
+        state.settingsSection = .horarios
+        openWindow(id: "schedule")
+        NSApp.activate(ignoringOtherApps: true)
         dismiss()
     }
 

@@ -10,18 +10,19 @@ Claude sempre abertas — por conta, automaticamente. Swift + SwiftUI
 
 Os planos Claude (Pro/Max) abrem uma janela de uso de 5h a partir do primeiro
 prompt. Quem usa pesado quer a janela já aberta na hora de sentar para
-trabalhar — não gastar a primeira hora dela aquecendo. O Ohayo renova cada
-conta sozinho, e a renovação contínua nunca dispara de forma redundante se já
-existe uma janela ativa: ele detecta a janela corrente passivamente pelos
-transcripts locais do Claude Code, sem nenhuma chamada de rede própria.
+trabalhar — não gastar a primeira hora dela aquecendo. O Ohayo encadeia as
+janelas de cada conta, e um Agendamento contínuo nunca executa de forma
+redundante enquanto já existe uma janela ativa: ele detecta a janela corrente
+passivamente pelos transcripts locais do Claude Code, sem nenhuma chamada de
+rede própria.
 
 ## Recursos
 
 - **Agendamentos unificados** — um único conceito para tudo que é agendado.
   Cada agendamento carrega um comando embutido e uma repetição: **Contínua**
   (encadeia janelas de 5h, com opt-in explícito antes de iniciar sem evidência
-  de janela ativa) ou **Horários
-  fixos** (horários × dias da semana). Tudo na seção **Horários**
+  de janela ativa) ou **Horários fixos** (horários × dias da semana). Tudo na
+  seção **Agendamentos**
 - **Comandos configuráveis** — um prompt do Claude (modelo, esforço,
   safe-mode, pasta de trabalho), um prompt do Codex (modelo, esforço de
   raciocínio, pasta de trabalho), ou qualquer comando shell — embutido direto
@@ -43,7 +44,7 @@ transcripts locais do Claude Code, sem nenhuma chamada de rede própria.
 - **Provider Doctor** — verificações somente leitura, na primeira abertura, da
   instalação das CLIs e do login de cada conta Claude/Codex configurada; nunca
   executa prompt nem consome cota
-- **Idioma** — inglês por padrão, com opção para português nas Configurações
+- **Idioma** — inglês por padrão, com opção para português nos Ajustes
 - **Pausar/Retomar** por conta, em **Contas**, e **Iniciar com o Mac**
   opcional
 
@@ -52,7 +53,7 @@ transcripts locais do Claude Code, sem nenhuma chamada de rede própria.
 - macOS 13+ (o binário v1.1.1 publicado atualmente exige Apple Silicon; a
   próxima release gerada por esta revisão será universal)
 - [Claude Code](https://claude.com/claude-code) instalado e logado (somente
-  se você usar tarefas Claude)
+  se você usar Agendamentos Claude)
 - [Codex CLI](https://github.com/openai/codex) instalado e logado (opcional,
   só para contas/comandos Codex)
 - Para build a partir do código: Swift 5.9+ (Xcode ou Command Line Tools)
@@ -107,46 +108,50 @@ enquanto alguma conta tem janela ativa, mostra `!` em erro e esmaece quando
 todas as contas agendadas estão pausadas; opcionalmente mostra também o tempo
 até a próxima janela vencer entre elas.
 
-Clicar no ícone abre um painel com os próximos disparos entre todas as
+Clicar no ícone abre um painel com os próximos disparos agendados entre todas as
 contas — quantos, é configurável em **Geral** (1–5, padrão 1) — ordenados
 por horário; contas pausadas são puladas, então só aparece o que vai
 executar de fato. O primeiro vem em destaque, os demais em linhas compactas:
-ícone do provedor, rótulo da conta, nome do evento e horário. Se não houver
+ícone do provedor, rótulo da conta, nome do Agendamento e horário. Se não houver
 nada para mostrar, o painel explica o motivo (nenhum agendamento ativo,
 todas as contas pausadas, ou apenas aguardando a próxima janela/horário).
-Clicar num card ou linha abre **Configurações → Tarefas** filtrado para
-aquela conta. O rodapé tem **Tarefas**, **Histórico** e
-**Configurações…**; o cabeçalho mostra um aviso se algum CLI estiver
-faltando, além de **Sair**.
+Clicar num card ou linha abre **Ohayo → Agendamentos** filtrado para aquela
+conta. O rodapé tem **Agendamentos**, **Histórico** e **Ajustes…**. Uma CLI
+ausente vira um aviso acionável de configuração; **Ajustes…**,
+**Permissões…** e **Sair do Ohayo** ficam agrupados no menu de ações
+secundárias.
 
-**Configurações** é uma janela em sidebar com quatro seções:
+A janela operacional **Ohayo** abre em **Agendamentos** e tem uma sidebar com
+três seções:
 
 - **Contas** — por conta, a identidade logada / apelido, o provedor com seu
   ícone, a pasta local, quantos agendamentos ativos miram a conta, e
   **Pausar/Retomar** por conta. Adicione ou remova contas aqui
-- **Tarefas** — a lista única de agendamentos. Cada um tem nome, um tipo
+- **Agendamentos** — a lista única de Agendamentos. Cada um tem nome, um tipo
   (Claude / Codex / comando shell) com sua config, uma conta e uma repetição —
-  **Contínua** (uma renovação da janela de 5h, no máximo uma por conta) ou
+  **Contínua** (encadeia janelas de uso, no máximo uma por conta) ou
   **Horários fixos** (horários × dias da semana). Um único formulário cria ou
-  edita qualquer um deles; novos agendamentos começam com o campo de comando
-  vazio. Entrar por uma tarefa no painel do menu filtra essa lista para a
+  edita qualquer um deles; novos Agendamentos começam com o campo de Comando
+  vazio. Entrar por um Agendamento no painel do menu filtra essa lista para a
   conta, com um chip para limpar o filtro
-- **Skill (opcional):** em tarefas Claude/Codex, escolha uma skill da conta, do
-  usuário ou do repositório selecionado. O Ohayo resolve skills da
+- **Skill (opcional):** em Agendamentos Claude/Codex, escolha uma skill da
+  conta, do usuário ou do repositório selecionado. O Ohayo resolve skills da
   conta/plugins Claude e `.claude/skills` nos ancestrais; para Codex, resolve
   também `$HOME/.agents/skills`, `.agents/skills` nos ancestrais e as skills
   dos plugins que a conta selecionada declara instalados e habilitados em
   `codex plugin list --json`. A consulta é somente leitura e nunca executa um
-  prompt. O disparo prefixa a skill ao prompt (`/skill mensagem` no Claude,
-  `$skill mensagem` no Codex). Selecionar uma skill carrega as customizações
+  prompt. Cada Disparo prefixa a skill ao Comando (`/skill comando` no Claude,
+  `$skill comando` no Codex). Selecionar uma skill carrega as customizações
   do Claude; a UI deixa claro que isso amplia o contexto e não é sandbox de
   filesystem
 - **Histórico** — disparos recentes em cards com status, ícone do provedor,
   modelo, apelido/e-mail da conta, comando, resposta e detalhes de erro;
-  filtrável por conta do mesmo jeito que Tarefas
-- **Geral** — Iniciar com o Mac, tempo restante na menu bar, detalhes sensíveis
-  nas notificações (desligados por padrão), quantos próximos disparos o painel
-  mostra (1–5), Idioma, permissões e a versão do app
+  filtrável por conta do mesmo jeito que Agendamentos
+
+As preferências gerais ficam na janela nativa **Ajustes…**, separadas da
+sidebar operacional: Iniciar com o Mac, tempo restante na barra de menus,
+detalhes sensíveis nas notificações (desligados por padrão), quantos próximos
+Disparos o painel mostra (1–5), Idioma, acesso ao sistema e a versão do app.
 
 ### Permissões na primeira abertura
 
@@ -156,7 +161,8 @@ comando de login correto quando há algo a corrigir. As verificações são some
 leitura: nunca executam prompt, iniciam login ou consomem cota. Nele você também
 pode permitir notificações, testar a automação do Terminal usada nas sessões
 interativas e, opcionalmente, ativar **Iniciar com o Mac**. Fechar o guia não
-desativa o app; reabra-o em **Ajustes → Geral → Permissões…**.
+desativa o app; reabra-o pelo menu de ações secundárias do painel ou em
+**Ajustes… → Acesso ao Sistema → Permissões…**.
 
 Se notificações ou automação do Terminal forem negadas, altere-as em **Ajustes
 do Sistema → Notificações → Ohayo** ou **Ajustes do Sistema → Privacidade e
@@ -164,7 +170,7 @@ Segurança → Automação** e reabra o guia para atualizar ou testar a integra�
 
 ## Como funciona
 
-Para gerenciar as renovações contínuas, o Ohayo lê os transcripts locais da
+Para manter as Repetições Contínuas, o Ohayo lê os transcripts locais da
 conta (`<conta>/projects/**.jsonl` no Claude, `sessions/**.jsonl` no Codex,
 por `mtime`) e reconstrói a janela de 5h corrente. Só aceita evidência positiva
 de uso: evento real de assistant Claude, sem erro/sintético e com tokens, ou
@@ -172,10 +178,10 @@ evento Codex `token_count` com `last_token_usage` positivo. Falhas de
 autenticação/modelo/rede e eventos com zero tokens não criam uma janela
 fictícia. Transcripts ilegíveis ou um schema de uso desconhecido viram um
 estado indisponível explícito e nunca iniciam um bootstrap. Se houver uma
-ativa, somente uma renovação contínua redundante é pulada; horários fixos
-sempre executam.
+ativa, somente um Disparo contínuo redundante é pulado; Agendamentos em
+Horários Fixos sempre executam.
 
-Um disparo Claude executa:
+Um Disparo do Claude inicia:
 
 ```
 claude -p --model <modelo> --effort <esforço> [--safe-mode]
@@ -185,18 +191,19 @@ O prompt é escrito em stdin, em vez de exposto na lista de argumentos do
 processo. A conta Claude nativa roda deliberadamente com
 `CLAUDE_CONFIG_DIR` ausente, pois exportar `~/.claude` muda a semântica de
 conta do Claude Code; perfis Claude customizados recebem o override. O Codex
-recebe o `CODEX_HOME` selecionado, com `~/.codex` como padrão. Tarefas shell
+recebe o `CODEX_HOME` selecionado, com `~/.codex` como padrão. Agendamentos shell
 não recebem variável de nenhum provider.
 
 Se o agendamento tem skill, o prompt é prefixado antes do disparo (`/skill
-mensagem` no Claude, `$skill mensagem` no Codex). No Claude isso exige carregar
+comando` no Claude, `$skill comando` no Codex). No Claude isso exige carregar
 as customizações; “ignorar customizações do Claude” não é apresentado como
 sandbox.
 
 Por padrão, Claude/Codex abrem no Terminal.app sem `-p` / `exec`, deixando a
 sessão interativa aberta. Abrir o Terminal é registrado como **Iniciado**, não
 como execução concluída: o Ohayo não observa o exit status final da sessão. Um
-horário fixo interativo ainda abre no horário agendado mesmo com janela ativa.
+Agendamento interativo em Horários Fixos ainda abre no horário agendado mesmo
+com janela ativa.
 Sem diretório de trabalho, abre em
 `~/Library/Application Support/Ohayo/workspace`. O script temporário privado
 usa modo `0600`, se remove no exit/sinais e resíduos antigos de crash são
@@ -207,8 +214,8 @@ trust no Terminal quando necessário. Imports externos do `CLAUDE.md` também
 nunca são pré-aprovados; esse consentimento continua visível.
 
 Os padrões Claude — Haiku, esforço baixo, customizações ignoradas e `1+1` —
-formam um prompt mínimo de renovação. Um disparo Codex batch executa `codex
-exec [--model <modelo>] --sandbox read-only [-c
+formam um Comando mínimo para a Repetição Contínua. Um Disparo Codex batch
+executa `codex exec [--model <modelo>] --sandbox read-only [-c
 model_reasoning_effort=<esforço>]`; o prompt também chega por stdin. Em
 **Padrão da conta**, modelo e raciocínio são omitidos para o `config.toml`
 valer. O timeout batch é configurável por agendamento: o padrão é 15 minutos
@@ -230,7 +237,7 @@ persistido, então uma pasta temporariamente ausente ou ambígua não muda de
 provider; disparo e leitura de cota recebem essa identidade explicitamente.
 Pastas de conta existentes usam o caminho canônico do filesystem como
 identidade. Cadastrar ou selecionar um symlink para a mesma conta Claude/Codex
-não cria outra fila, agenda, pausa nem cooldown de cota.
+não cria outra fila, Agendamento, pausa nem cooldown de cota.
 
 Um novo agendamento **Contínuo** aguarda quando não existe evidência de janela
 ativa, a menos que você habilite explicitamente **Tentar iniciar quando não

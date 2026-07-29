@@ -72,6 +72,7 @@ enum MenuPanelLogic {
     /// O que o painel mostra quando não há disparo futuro a exibir.
     enum PanelEmptyState {
         case noSchedules
+        case allDisabled
         case allPaused
         case quotaUnavailable
         case needsAttention
@@ -86,8 +87,9 @@ enum MenuPanelLogic {
                            isQuotaUnavailable: (URL) -> Bool = { _ in false },
                            needsAttention: (URL) -> Bool = { _ in false })
         -> PanelEmptyState {
+        if tasks.isEmpty { return .noSchedules }
         let enabled = tasks.filter { $0.enabled }
-        if enabled.isEmpty { return .noSchedules }
+        if enabled.isEmpty { return .allDisabled }
         if enabled.contains(where: { $0.resolvedCommand.kind == .shell }) { return .waiting }
         let accounts = Set(enabled.compactMap { accountDir($0) })
         if accounts.isEmpty { return .waiting }

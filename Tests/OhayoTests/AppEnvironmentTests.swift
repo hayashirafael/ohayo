@@ -230,27 +230,161 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertNotEqual(state.uiHeartbeat, antes)
     }
 
+    func testStatusTickAtualizaJanelasAntesDoPulsoDeUI() async {
+        let defaults = UserDefaults(suiteName: "ohayo-test-\(UUID().uuidString)")!
+        let state = AppState(defaults: defaults)
+        var task = ScheduledTask(uid: UUID(), command: AppState.defaultMessage)
+        task.repetition = .continuous
+        state.tasks = [task]
+        let detector = MockDetector()
+        let end = Date().addingTimeInterval(3_600)
+        detector.end = end
+        let env = AppEnvironment(
+            state: state,
+            taskScheduler: TaskScheduler(),
+            detector: detector,
+            terminalLauncher: NoopTerminalLauncher(),
+            authenticationChecker: AllowAllAuthenticationChecker(),
+            probeCLIs: false
+        )
+        await drain(env)
+        state.windowEnds = [:]
+        state.nextRenewals[
+            AppState.defaultConfigDir.standardizedFileURL
+        ] = end
+        let antes = state.uiHeartbeat
+
+        await env.statusTick()
+
+        XCTAssertEqual(
+            state.windowEnds[AppState.defaultConfigDir.standardizedFileURL],
+            end
+        )
+        XCTAssertNotEqual(state.uiHeartbeat, antes)
+    }
+
+    func testWakeDeLaunchPublicaJanelaAtivaSemEsperarPrimeiroTick() async {
+        let defaults = UserDefaults(suiteName: "ohayo-test-\(UUID().uuidString)")!
+        let state = AppState(defaults: defaults)
+        var task = ScheduledTask(uid: UUID(), command: AppState.defaultMessage)
+        task.repetition = .continuous
+        state.tasks = [task]
+        let detector = MockDetector()
+        let end = Date().addingTimeInterval(3_600)
+        detector.end = end
+        let env = AppEnvironment(
+            state: state,
+            taskScheduler: TaskScheduler(),
+            detector: detector,
+            terminalLauncher: NoopTerminalLauncher(),
+            authenticationChecker: AllowAllAuthenticationChecker(),
+            probeCLIs: false
+        )
+
+        await env.wakeTask?.value
+        await env.reconfigureTask?.value
+
+        XCTAssertEqual(
+            state.windowEnds[AppState.defaultConfigDir.standardizedFileURL],
+            end
+        )
+    }
+
+    func testMenuBarUsaSomenteJanelaDetectadaComoEstadoAtivo() {
+        let state = AppState(defaults: freshDefaults())
+        let futuro = Date().addingTimeInterval(3_600)
+        state.nextRenewals[AppState.defaultConfigDir] = futuro
+        var label = MenuBarLabel(state: state)
+
+        XCTAssertNil(label.soonestEnd)
+        XCTAssertEqual(label.glyphState, .idle)
+
+        state.windowEnds[AppState.defaultConfigDir] = futuro
+        label = MenuBarLabel(state: state)
+
+        XCTAssertEqual(label.soonestEnd, futuro)
+        XCTAssertEqual(label.glyphState, .active)
+        XCTAssertEqual(
+            label.accessibilityStatus,
+            state.strings.menuBarStatusActive(
+                Fmt.remaining(until: futuro, from: Date())
+            )
+        )
+    }
+
+    func testMenuBarSinalizaTodosOsProblemasFailClosed() {
+        let state = AppState(defaults: freshDefaults())
+        let account = AppState.defaultConfigDir.standardizedFileURL
+        var label = MenuBarLabel(state: state)
+
+        state.quotaUnavailableReasons[account] = "schema changed"
+        label = MenuBarLabel(state: state)
+        XCTAssertTrue(label.hasProblem)
+        XCTAssertEqual(label.glyphState, .problem)
+        XCTAssertEqual(label.accessibilityStatus, state.strings.quotaUnavailable)
+
+        state.quotaUnavailableReasons.removeAll()
+        state.renewalNeedsAttention.insert(account)
+        label = MenuBarLabel(state: state)
+        XCTAssertTrue(label.hasProblem)
+        XCTAssertEqual(label.glyphState, .problem)
+        XCTAssertEqual(label.accessibilityStatus, state.strings.needsAttention)
+
+        state.renewalNeedsAttention.removeAll()
+        state.tasks = [
+            ScheduledTask(uid: UUID(), command: AppState.defaultMessage)
+        ]
+        state.cliFound[.claude] = false
+        label = MenuBarLabel(state: state)
+        XCTAssertTrue(label.hasProblem)
+        XCTAssertEqual(label.glyphState, .problem)
+        XCTAssertEqual(
+            label.accessibilityStatus,
+            state.strings.cliNotFound(.claude)
+        )
+
+        state.cliFound[.claude] = true
+        state.recordEvent(state.makeEvent(
+            date: Date(),
+            result: .failure(message: "boom"),
+            message: AppState.defaultMessage,
+            origin: .agenda
+        ))
+        label = MenuBarLabel(state: state)
+        XCTAssertTrue(label.hasProblem)
+        XCTAssertEqual(label.glyphState, .problem)
+        XCTAssertEqual(
+            label.accessibilityStatus,
+            state.strings.notificationFailureTitle
+        )
+    }
+
     func testRefreshWindowEndsPublicaFimDeJanelaPorContaAgendada() async {
         let defaults = UserDefaults(suiteName: "ohayo-test-\(UUID().uuidString)")!
         let state = AppState(defaults: defaults)
         var task = ScheduledTask(uid: UUID(), command: AppState.defaultMessage)
-        task.repetition = .fixed // sem times: nenhum timer arma
+        task.repetition = .continuous
         state.tasks = [task]
         let detector = MockDetector()
         let end = Date().addingTimeInterval(3600)
         detector.end = end
         let env = AppEnvironment(state: state, taskScheduler: TaskScheduler(),
                                  detector: detector, probeCLIs: false)
+        await drain(env)
+        let account = AppState.defaultConfigDir.standardizedFileURL
+        state.windowEnds = [:]
+        state.nextRenewals[account] = end
         await env.refreshWindowEnds()
-        XCTAssertEqual(state.windowEnds[AppState.defaultConfigDir.standardizedFileURL], end)
+        XCTAssertEqual(state.windowEnds[account], end)
 
         // Janela que sumiu (nil) sai do dicionário no próximo refresh.
+        state.windowEnds = [:]
         detector.end = nil
         await env.refreshWindowEnds()
         XCTAssertTrue(state.windowEnds.isEmpty)
     }
 
-    func testRefreshWindowEndsPublicaQuotaIndisponivelSemInventarJanela() async {
+    func testRefreshWindowEndsNaoSobrescreveSaudePublicadaPeloEngine() async {
         let defaults = UserDefaults(suiteName: "ohayo-test-\(UUID().uuidString)")!
         let state = AppState(defaults: defaults)
         state.tasks = [
@@ -264,16 +398,75 @@ final class AppEnvironmentTests: XCTestCase {
             detector: detector,
             probeCLIs: false
         )
+        await drain(env)
+        let account = AppState.defaultConfigDir.standardizedFileURL
+        state.nextRenewals[account] = Date().addingTimeInterval(3_600)
+        state.quotaUnavailableReasons[account] = "engine source of truth"
 
         await env.refreshWindowEnds()
 
         XCTAssertTrue(state.windowEnds.isEmpty)
         XCTAssertEqual(
-            state.quotaUnavailableReasons[
-                AppState.defaultConfigDir.standardizedFileURL
-            ],
-            "schema changed"
+            state.quotaUnavailableReasons[account],
+            "engine source of truth"
         )
+    }
+
+    func testRefreshWindowEndsIgnoraContaPausadaMesmoComSaudeAntiga() async {
+        let defaults = UserDefaults(suiteName: "ohayo-test-\(UUID().uuidString)")!
+        let state = AppState(defaults: defaults)
+        state.tasks = [
+            ScheduledTask(uid: UUID(), command: AppState.defaultMessage)
+        ]
+        let detector = MockDetector()
+        detector.stateOverride = .unavailable(reason: "schema changed")
+        let env = AppEnvironment(
+            state: state,
+            taskScheduler: TaskScheduler(),
+            detector: detector,
+            probeCLIs: false
+        )
+        await drain(env)
+        let account = AppState.defaultConfigDir.standardizedFileURL
+        state.setPaused(account, true)
+        await drain(env)
+        detector.calls = 0
+        state.nextRenewals[account] = Date().addingTimeInterval(3_600)
+        state.quotaUnavailableReasons[account] = "stale"
+
+        await env.refreshWindowEnds()
+
+        XCTAssertEqual(detector.calls, 0)
+        XCTAssertTrue(state.windowEnds.isEmpty)
+        let label = MenuBarLabel(state: state)
+        XCTAssertFalse(label.hasProblem)
+        XCTAssertEqual(label.accessibilityStatus, state.strings.menuBarStatusPaused)
+    }
+
+    func testRefreshWindowEndsNaoSondaAgendamentoFixo() async {
+        let defaults = UserDefaults(suiteName: "ohayo-test-\(UUID().uuidString)")!
+        let state = AppState(defaults: defaults)
+        var task = ScheduledTask(uid: UUID(), command: AppState.defaultMessage)
+        task.repetition = .fixed
+        state.tasks = [task]
+        let detector = MockDetector()
+        detector.end = Date().addingTimeInterval(3_600)
+        let env = AppEnvironment(
+            state: state,
+            taskScheduler: TaskScheduler(),
+            detector: detector,
+            probeCLIs: false
+        )
+        await drain(env)
+        detector.calls = 0
+        state.nextRenewals[
+            AppState.defaultConfigDir.standardizedFileURL
+        ] = Date().addingTimeInterval(3_600)
+
+        await env.refreshWindowEnds()
+
+        XCTAssertEqual(detector.calls, 0)
+        XCTAssertTrue(state.windowEnds.isEmpty)
     }
 
     /// Disparo manual do botão "Executar agora": comando padrão (Claude,

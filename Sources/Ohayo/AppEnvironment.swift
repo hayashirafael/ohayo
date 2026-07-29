@@ -17,6 +17,13 @@ final class AppEnvironment: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     private var cancellables: Set<AnyCancellable> = []
     private var statusTimer: Timer?
+    /// Evita que um tick lento (por exemplo, ao ler transcripts grandes)
+    /// sobreponha o próximo disparo do Timer e publique um snapshot antigo.
+    private var statusTickInProgress = false
+    /// O painel e o tick podem pedir a mesma confirmação de janela ao mesmo
+    /// tempo. Uma única leitura é suficiente; a próxima manutenção revalida.
+    private var windowRefreshInProgress = false
+    private var windowRefreshRequested = false
     /// Última reconfiguração agendada — os testes aguardam via `.value`.
     private(set) var reconfigureTask: Task<Void, Never>?
     /// Garante last-write-wins quando uma configuração antiga fica suspensa
@@ -295,46 +302,96 @@ final class AppEnvironment: ObservableObject {
                 accountProviders: accountProviders,
                 paused: false
             )
+            guard generation == self.reconfigureGeneration else { return }
+            // `refreshWindowEnds` usa o deadline já classificado pelo engine.
+            // Fazer a confirmação aqui fecha o launch/edição sem esperar o
+            // primeiro tick periódico e sem reler contas inativas.
+            await self.refreshWindowEnds()
         }
     }
 
-    /// Tick periódico: re-arma as renovações e a agenda (alimenta ícone e "3h12" na barra).
+    /// Tick periódico: re-arma as renovações e a agenda, atualiza a evidência
+    /// real de janelas e só então publica o pulso usado pela UI.
     func statusTick() async {
+        guard !statusTickInProgress else { return }
+        statusTickInProgress = true
+        defer { statusTickInProgress = false }
+
         state.recordAlive()
         reconfigureIfAccountAvailabilityChanged()
         await renewalEngine.rearmAll()
         await taskScheduler.rearmAll()
+        await refreshWindowEnds()
         // Publica um pulso mesmo quando `rearmAll` não mutou os snapshots
         // (early-return com timer já armado): sem isso o menu não reconstrói e
         // os horários calculados com `Date()` ficam congelados.
         state.pulseUI()
     }
 
-    /// Consulta o detector para cada conta agendada e publica o fim de janela.
-    /// Chamado quando o painel do menu abre — sem timer próprio.
+    /// Confirma como janela ativa apenas deadlines contínuos que o
+    /// `RenewalEngine` acabou de detectar. Contas inativas já foram lidas pelo
+    /// engine no mesmo ciclo; não as varrer de novo evita duplicar I/O e parse
+    /// de transcripts a cada minuto. Fixos e contas pausadas não participam da
+    /// saúde da janela contínua.
     func refreshWindowEnds() async {
-        let accounts = MenuPanelLogic.scheduledAccounts(
-            tasks: state.tasks,
-            accountDir: { [state] in state.accountDir(for: $0) },
-            label: { [state] in state.label(for: $0) })
-        var result: [URL: Date] = [:]
-        var unavailable: [URL: String] = [:]
-        for dir in accounts {
-            let normalized = dir.standardizedFileURL
-            switch await detector.quotaWindowState(
-                account: dir,
-                provider: state.provider(for: dir)
-            ) {
-            case .active(let end) where end > Date():
-                result[dir.standardizedFileURL] = end
-            case .unavailable(let reason):
-                unavailable[normalized] = reason
-            case .active, .inactive:
-                break
-            }
+        guard !windowRefreshInProgress else {
+            windowRefreshRequested = true
+            return
         }
-        state.windowEnds = result
-        state.quotaUnavailableReasons = unavailable
+        windowRefreshInProgress = true
+        defer { windowRefreshInProgress = false }
+
+        repeat {
+            windowRefreshRequested = false
+            let now = Date()
+            let accounts = activeContinuousAccounts()
+            let accountSet = Set(accounts)
+            var result = state.windowEnds.filter {
+                accountSet.contains($0.key.standardizedFileURL) && $0.value > now
+            }
+            for dir in accounts where result[dir] == nil {
+                // `nextRenewals` também pode conter retry/cooldown, por isso o
+                // detector ainda confirma a evidência antes de preencher o glifo.
+                guard let candidate = state.nextRenewals[dir], candidate > now else {
+                    continue
+                }
+                switch await detector.quotaWindowState(
+                    account: dir,
+                    provider: state.provider(for: dir)
+                ) {
+                case .active(let end) where end > now:
+                    result[dir] = end
+                case .active, .inactive, .unavailable:
+                    break
+                }
+            }
+            // Uma edição pode ter ocorrido enquanto o detector estava
+            // suspenso. Não publica contas antigas; refaz com o snapshot novo.
+            if accounts != activeContinuousAccounts() {
+                windowRefreshRequested = true
+                continue
+            }
+            state.windowEnds = result
+        } while windowRefreshRequested
+    }
+
+    /// Contas realmente gerenciadas pelo fluxo contínuo. Mantém a mesma
+    /// exclusão de pausas, shell e conflitos usada na reconfiguração do engine.
+    private func activeContinuousAccounts() -> [URL] {
+        var tasksByAccount: [URL: Int] = [:]
+        for task in state.tasks
+            where task.enabled
+                && task.repetition == .continuous
+                && task.resolvedCommand.kind != .shell {
+            guard let dir = state.accountDir(for: task), !state.isPaused(dir) else {
+                continue
+            }
+            tasksByAccount[dir.standardizedFileURL, default: 0] += 1
+        }
+        return tasksByAccount
+            .filter { $0.value == 1 }
+            .map(\.key)
+            .sorted { $0.path < $1.path }
     }
 
     /// Executa o catch-up agora. Mantido como seam interno para testes
@@ -367,7 +424,9 @@ final class AppEnvironment: ObservableObject {
 
     private func scheduleWakeHandling() {
         wakeTask = Task { @MainActor [weak self] in
-            await self?.handleWake()
+            guard let self else { return }
+            await self.handleWake()
+            await self.refreshWindowEnds()
         }
     }
 }

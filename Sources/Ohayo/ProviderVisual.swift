@@ -76,7 +76,9 @@ struct ProviderIcon: View {
         }
         .scaledToFit()
         .frame(width: size, height: size)
-        .accessibilityLabel(provider?.displayName ?? "Command")
+        // O ícone sempre acompanha um rótulo textual no app. Escondê-lo evita
+        // anúncios duplicados e não fixa "Command" em inglês no VoiceOver.
+        .accessibilityHidden(true)
     }
 }
 

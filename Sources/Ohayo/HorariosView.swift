@@ -3,6 +3,26 @@ import SwiftUI
 /// Seção Horários: barra fixa (resumo, filtros, ordenação e novo agendamento)
 /// sobre a lista compacta de agendamentos — cada linha expande no clique.
 struct HorariosView: View {
+    struct RunFeedback: Equatable {
+        let token: UUID
+        let result: FireResult
+    }
+
+    struct ManualRunTarget: Equatable {
+        let messageText: String
+        let accountPath: String?
+        let provider: Provider?
+        let modelName: String?
+
+        func matches(_ event: FireEvent) -> Bool {
+            event.origin == .manual
+                && event.messageText == messageText
+                && event.accountPath == accountPath
+                && event.provider == provider
+                && event.modelName == modelName
+        }
+    }
+
     @ObservedObject var state: AppState
     let env: AppEnvironment
     @State private var showingForm = false
@@ -13,6 +33,8 @@ struct HorariosView: View {
     @State private var sort: HorariosSort = .padrao
     @State private var expanded: Set<UUID> = []
     @State private var firing: Set<UUID> = []
+    @State private var runTokens: [UUID: UUID] = [:]
+    @State private var runFeedback: [UUID: RunFeedback] = [:]
     /// Agendamento aguardando confirmação de exclusão (excluir não tem undo).
     @State private var pendingDelete: ScheduledTask? = nil
     private var strings: L10n { state.strings }
@@ -48,18 +70,36 @@ struct HorariosView: View {
         } message: { task in
             Text(HorariosListModel.title(task))
         }
+        .onAppear(perform: consumeNewScheduleRequest)
+        .onChange(of: state.newScheduleRequest) { _ in
+            consumeNewScheduleRequest()
+        }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
+            Image(systemName: "calendar.badge.plus")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(.secondary)
             Text(strings.noSchedulesYet)
+                .font(.headline)
             Text(strings.noSchedulesDescription)
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
             Button(strings.newSchedule) { editing = nil; showingForm = true }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut("n", modifiers: .command)
         }
-        .frame(maxWidth: .infinity, minHeight: 200)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(40)
+    }
+
+    private func consumeNewScheduleRequest() {
+        guard state.newScheduleRequest != nil else { return }
+        state.newScheduleRequest = nil
+        editing = nil
+        showingForm = true
     }
 
     // MARK: Linhas resolvidas contra o estado
@@ -100,6 +140,9 @@ struct HorariosView: View {
 
     private var headerBar: some View {
         VStack(alignment: .leading, spacing: 6) {
+            Text(strings.schedulesSubtitle)
+                .font(.callout)
+                .foregroundStyle(.secondary)
             summaryLine
             if let deepLink = state.accountFilter {
                 accountFilterChip(deepLink)
@@ -114,6 +157,7 @@ struct HorariosView: View {
                 } label: {
                     Label(strings.newSchedule, systemImage: "plus")
                 }
+                .keyboardShortcut("n", modifiers: .command)
             }
         }
         .padding(.horizontal, 16)
@@ -147,6 +191,7 @@ struct HorariosView: View {
             }
             .buttonStyle(.plain)
             .help(strings.clearFilter)
+            .accessibilityLabel(strings.clearFilter)
         }
         .foregroundStyle(.tint)
     }
@@ -238,8 +283,6 @@ struct HorariosView: View {
             if isExpanded { detailBlock(row) }
         }
         .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onTapGesture { toggleExpanded(task.uid) }
         .contextMenu {
             Button(strings.runNow) { runNow(task) }
             Button(strings.edit) { editing = task; showingForm = true }
@@ -252,35 +295,56 @@ struct HorariosView: View {
         let task = row.task
         let msg = task.resolvedCommand
         return HStack(spacing: 8) {
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            Button {
+                toggleExpanded(task.uid)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .frame(width: 14, height: 20)
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? strings.collapseSchedule : strings.expandSchedule)
+            .accessibilityLabel(isExpanded ? strings.collapseSchedule : strings.expandSchedule)
             Toggle("", isOn: enabledBinding(task))
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .labelsHidden()
-            ProviderIcon(provider: provider(for: msg.kind), size: 16)
-                .foregroundStyle(task.enabled ? .primary : .secondary)
-            Text(HorariosListModel.title(task))
-                .fontWeight(.medium)
-                .lineLimit(1).truncationMode(.tail)
-                .foregroundStyle(task.enabled ? .primary : .secondary)
-            if let label = row.accountLabel {
-                Text(label)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle)
+                .accessibilityLabel(
+                    strings.scheduleEnabled(HorariosListModel.title(task))
+                )
+            Button {
+                toggleExpanded(task.uid)
+            } label: {
+                HStack(spacing: 8) {
+                    ProviderIcon(provider: provider(for: msg.kind), size: 16)
+                        .foregroundStyle(task.enabled ? .primary : .secondary)
+                    Text(HorariosListModel.title(task))
+                        .fontWeight(.medium)
+                        .lineLimit(1).truncationMode(.tail)
+                        .foregroundStyle(task.enabled ? .primary : .secondary)
+                    if let label = row.accountLabel {
+                        Text(label)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    Spacer(minLength: 8)
+                    if msg.kind != .shell, let cfg = msg.configDir, !cfg.isEmpty,
+                       row.accountPath == nil {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                            .help(strings.accountFolderMissing)
+                    }
+                    if let next = nextLineText(row) {
+                        Text(next).font(.caption2).foregroundStyle(.tint)
+                    }
+                }
+                .contentShape(Rectangle())
             }
-            Spacer(minLength: 8)
-            if msg.kind != .shell, let cfg = msg.configDir, !cfg.isEmpty,
-               row.accountPath == nil {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.orange)
-                    .help(strings.accountFolderMissing)
-            }
-            if let next = nextLineText(row) {
-                Text(next).font(.caption2).foregroundStyle(.tint)
-            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(scheduleAccessibilityLabel(row))
+            .accessibilityValue(nextLineText(row) ?? "")
         }
     }
 
@@ -306,7 +370,15 @@ struct HorariosView: View {
             }
             HStack(spacing: 14) {
                 Button { runNow(task) } label: {
-                    Label(strings.runNow, systemImage: "play.circle")
+                    if firing.contains(task.uid) {
+                        HStack(spacing: 5) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(strings.runningNow)
+                        }
+                    } else {
+                        Label(strings.runNow, systemImage: "play.circle")
+                    }
                 }
                 .disabled(firing.contains(task.uid))
                 Button { editing = task; showingForm = true } label: {
@@ -319,6 +391,21 @@ struct HorariosView: View {
             .buttonStyle(.plain)
             .font(.caption)
             .padding(.top, 2)
+            if let feedback = runFeedback[task.uid] {
+                let result = feedback.result
+                HStack(spacing: 8) {
+                    Label(feedbackTitle(result), systemImage: feedbackSymbol(result))
+                        .foregroundStyle(feedbackColor(result))
+                    if case .failure = result {
+                        Button(strings.viewDetails) {
+                            state.accountFilter = state.accountDir(for: task)
+                            state.settingsSection = .historico
+                        }
+                        .buttonStyle(.link)
+                    }
+                }
+                .font(.caption)
+            }
         }
         .padding(.leading, 24)
     }
@@ -333,16 +420,129 @@ struct HorariosView: View {
     /// aparece no Histórico (e nas notificações já existentes).
     private func runNow(_ task: ScheduledTask) {
         guard !firing.contains(task.uid) else { return }
+        let token = UUID()
+        let startedAt = Date()
+        let previousHistory = state.history
+        let target = manualRunTarget(for: task)
+        runTokens[task.uid] = token
+        runFeedback[task.uid] = nil
         firing.insert(task.uid)
         Task {
             await env.fireNow(task)
             firing.remove(task.uid)
+            guard runTokens[task.uid] == token else {
+                return
+            }
+            guard let event = Self.manualRunEvent(
+                target: target,
+                startedAt: startedAt,
+                previousHistory: previousHistory,
+                currentHistory: state.history
+            ) else {
+                runTokens[task.uid] = nil
+                return
+            }
+            runFeedback[task.uid] = RunFeedback(token: token, result: event.result)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if Self.feedback(runFeedback[task.uid], belongsTo: token) {
+                runFeedback[task.uid] = nil
+                if runTokens[task.uid] == token {
+                    runTokens[task.uid] = nil
+                }
+            }
         }
     }
 
     private func remove(_ task: ScheduledTask) {
         state.tasks.removeAll { $0.uid == task.uid }
         expanded.remove(task.uid)
+        runTokens[task.uid] = nil
+        runFeedback[task.uid] = nil
+    }
+
+    private func manualRunTarget(for task: ScheduledTask) -> ManualRunTarget {
+        let message = task.resolvedCommand
+        let provider: Provider?
+        let modelName: String?
+        switch message.kind {
+        case .claude:
+            provider = .claude
+            modelName = message.resolvedModel.label
+        case .codex:
+            provider = .codex
+            let trimmed = message.codexModel?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            modelName = trimmed?.isEmpty == false ? trimmed : nil
+        case .shell:
+            provider = nil
+            modelName = nil
+        }
+        return ManualRunTarget(
+            messageText: message.text,
+            accountPath: state.intendedAccountDir(for: task)?
+                .standardizedFileURL.path,
+            provider: provider,
+            modelName: modelName
+        )
+    }
+
+    /// Subtrai o snapshot anterior como multiset e só aceita um evento novo
+    /// que corresponda à identidade completa do disparo. Se dois disparos
+    /// indistinguíveis ocorrerem juntos, falha fechado em vez de exibir o
+    /// resultado de outro agendamento.
+    static func manualRunEvent(
+        target: ManualRunTarget,
+        startedAt: Date,
+        previousHistory: [FireEvent],
+        currentHistory: [FireEvent]
+    ) -> FireEvent? {
+        var previous = previousHistory
+        let added = currentHistory.filter { event in
+            guard let index = previous.firstIndex(of: event) else {
+                return true
+            }
+            previous.remove(at: index)
+            return false
+        }
+        let matches = added.filter {
+            $0.date >= startedAt && target.matches($0)
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    static func feedback(_ feedback: RunFeedback?, belongsTo token: UUID) -> Bool {
+        feedback?.token == token
+    }
+
+    private func feedbackTitle(_ result: FireResult) -> String {
+        switch result {
+        case .success: return strings.historySuccess
+        case .launched: return strings.historyLaunched
+        case .failure: return strings.historyFailure
+        case .skipped: return strings.historySkipped
+        case .missed: return strings.historyMissed
+        }
+    }
+
+    private func feedbackSymbol(_ result: FireResult) -> String {
+        switch result {
+        case .success: return "checkmark.circle.fill"
+        case .launched: return "terminal.fill"
+        case .failure: return "xmark.circle.fill"
+        case .skipped: return "arrow.uturn.right.circle.fill"
+        case .missed: return "moon.zzz.fill"
+        }
+    }
+
+    private func feedbackColor(_ result: FireResult) -> Color {
+        switch result {
+        case .success: return .green
+        case .launched: return .blue
+        case .failure: return .red
+        case .skipped: return .secondary
+        case .missed: return .orange
+        }
     }
 
     // MARK: Textos auxiliares
@@ -367,6 +567,24 @@ struct HorariosView: View {
         case .codex: return .codex
         case .shell: return nil
         }
+    }
+
+    private func scheduleAccessibilityLabel(_ row: HorariosRow) -> String {
+        let message = row.task.resolvedCommand
+        let providerName: String
+        switch message.kind {
+        case .claude: providerName = Provider.claude.displayName
+        case .codex: providerName = Provider.codex.displayName
+        case .shell: providerName = strings.command
+        }
+        var parts = [HorariosListModel.title(row.task), providerName]
+        let configuredAccount = message.configDir.map {
+            state.label(for: URL(fileURLWithPath: $0))
+        }
+        if let account = row.accountLabel ?? configuredAccount {
+            parts.append(account)
+        }
+        return parts.joined(separator: ", ")
     }
 
     /// Conta + modelo do disparo: "ailton@… · Haiku 4.5 · low" (Claude),

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Painel do menu da barra (.window): as próximas N tarefas a disparar entre
+/// Painel do menu da barra (.window): os próximos N agendamentos a disparar entre
 /// todas as contas (padrão 1, configurável em Geral), ordenadas por horário.
 /// Contas pausadas são puladas — o painel mostra o que vai executar de fato.
-/// Clique numa tarefa abre Ajustes › Tarefas filtrado pela conta dela.
+/// Clique num agendamento abre Ohayo › Agendamentos filtrado pela conta dele.
 struct MenuPanel: View {
     @ObservedObject var state: AppState
     let env: AppEnvironment
@@ -33,8 +33,8 @@ struct MenuPanel: View {
             content
             footer
         }
-        .padding(10)
-        .frame(width: 310)
+        .padding(12)
+        .frame(width: 340)
         .onAppear {
             hovered = nil
             // O painel não mostra mais a janela de 5h, mas o glifo da barra
@@ -43,27 +43,68 @@ struct MenuPanel: View {
         }
     }
 
-    // MARK: - Cabeçalho ("Ohayo" ou aviso de CLI + botão Sair)
+    // MARK: - Cabeçalho
 
     private var header: some View {
-        HStack {
-            Text(headerTitle)
-                .font(.caption)
-                .foregroundStyle(state.missingCLIs.isEmpty ? .secondary : Color.orange)
-                .lineLimit(1)
-            Spacer()
-            Button {
-                NSApplication.shared.terminate(nil)
-            } label: {
-                Image(systemName: "power")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 24, height: 24)
-                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+        HStack(spacing: 8) {
+            if state.missingCLIs.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Ohayo")
+                        .font(.headline)
+                    if panelHasProblem {
+                        Button(action: openHealthDetails) {
+                            Label(panelHealthTitle, systemImage: panelHealthSymbol)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                        .buttonStyle(.plain)
+                        .help(healthDetailsTitle)
+                    } else {
+                        Label(panelHealthTitle, systemImage: panelHealthSymbol)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                Button(action: openPermissions) {
+                    Label(headerTitle, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.plain)
+                .help(strings.reviewSetup)
             }
-            .buttonStyle(.plain)
-            .help(strings.quit)
+            Spacer()
+            Menu {
+                Button {
+                    openSettings()
+                } label: {
+                    Label(strings.settingsShort, systemImage: "gearshape")
+                }
+                Button {
+                    openPermissions()
+                } label: {
+                    Label(strings.permissionsSettingsButton, systemImage: "checklist")
+                }
+                Divider()
+                Button {
+                    NSApplication.shared.terminate(nil)
+                } label: {
+                    Label(strings.quitOhayo, systemImage: "power")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help(strings.moreActions)
+            .accessibilityLabel(strings.moreActions)
         }
-        .padding(.horizontal, 2)
+        .padding(.horizontal, 3)
+        .padding(.bottom, 2)
     }
 
     private var headerTitle: String {
@@ -73,25 +114,53 @@ struct MenuPanel: View {
         return "Ohayo"
     }
 
+    private var panelHasProblem: Bool {
+        if lastEventFailed { return true }
+        return !state.allScheduledAccountsPaused
+            && (!state.quotaUnavailableReasons.isEmpty
+                || !state.renewalNeedsAttention.isEmpty)
+    }
+
+    private var panelHealthTitle: String {
+        if panelHasProblem { return strings.menuBarStatusProblem }
+        if state.allScheduledAccountsPaused { return strings.menuBarStatusPaused }
+        return strings.ready
+    }
+
+    private var panelHealthSymbol: String {
+        if panelHasProblem { return "exclamationmark.triangle.fill" }
+        if state.allScheduledAccountsPaused { return "pause.circle.fill" }
+        return "checkmark.circle.fill"
+    }
+
+    private var lastEventFailed: Bool {
+        if case .failure = state.lastEvent?.result { return true }
+        return false
+    }
+
+    private var healthDetailsTitle: String {
+        lastEventFailed ? strings.viewDetails : strings.reviewSchedules
+    }
+
+    private func openHealthDetails() {
+        open(lastEventFailed ? .historico : .horarios, filter: nil)
+    }
+
     // MARK: - Próximos disparos (1º em destaque, demais compactos)
 
     @ViewBuilder
     private var content: some View {
         let events = upcoming
         if events.isEmpty {
-            Text(emptyText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
+            emptyContent
         } else {
             highlightCard(events[0])
             ForEach(events.dropFirst(), id: \.taskUID) { compactRow($0) }
         }
     }
 
-    private var emptyText: String {
-        switch MenuPanelLogic.emptyState(
+    private var emptyPanelState: MenuPanelLogic.PanelEmptyState {
+        MenuPanelLogic.emptyState(
             tasks: state.tasks,
             accountDir: { state.accountDir(for: $0) },
             isPaused: { state.isPaused($0) },
@@ -100,12 +169,91 @@ struct MenuPanel: View {
             },
             needsAttention: {
                 state.renewalNeedsAttention.contains($0.standardizedFileURL)
-            }) {
-        case .noSchedules: return strings.noActiveSchedules
+            })
+    }
+
+    private var emptyContent: some View {
+        VStack(spacing: 9) {
+            Image(systemName: emptySymbol)
+                .font(.system(size: 27, weight: .light))
+                .foregroundStyle(emptyStateIsProblem ? .orange : .secondary)
+            Text(emptyTitle)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            Text(emptyDescription)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(emptyActionTitle, action: emptyAction)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 20)
+        .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var emptySymbol: String {
+        switch emptyPanelState {
+        case .noSchedules: return "calendar.badge.plus"
+        case .allDisabled: return "pause.rectangle"
+        case .allPaused: return "pause.circle"
+        case .quotaUnavailable: return "exclamationmark.shield"
+        case .needsAttention: return "exclamationmark.triangle"
+        case .waiting: return "hourglass"
+        }
+    }
+
+    private var emptyStateIsProblem: Bool {
+        switch emptyPanelState {
+        case .quotaUnavailable, .needsAttention: return true
+        case .noSchedules, .allDisabled, .allPaused, .waiting: return false
+        }
+    }
+
+    private var emptyTitle: String {
+        switch emptyPanelState {
+        case .noSchedules: return strings.noSchedulesPanelTitle
+        case .allDisabled: return strings.allSchedulesDisabledPanelTitle
         case .allPaused: return strings.allAccountsPaused
-        case .quotaUnavailable: return strings.quotaUnavailable
-        case .needsAttention: return strings.needsAttention
-        case .waiting: return strings.waitingForWindow
+        case .quotaUnavailable: return strings.quotaUnavailablePanelTitle
+        case .needsAttention: return strings.needsAttentionPanelTitle
+        case .waiting: return strings.waitingForWindowPanelTitle
+        }
+    }
+
+    private var emptyDescription: String {
+        switch emptyPanelState {
+        case .noSchedules: return strings.noSchedulesPanelDescription
+        case .allDisabled: return strings.allSchedulesDisabledPanelDescription
+        case .allPaused: return strings.allPausedPanelDescription
+        case .quotaUnavailable: return strings.quotaUnavailablePanelDescription
+        case .needsAttention: return strings.needsAttentionPanelDescription
+        case .waiting: return strings.waitingForWindowPanelDescription
+        }
+    }
+
+    private var emptyActionTitle: String {
+        switch emptyPanelState {
+        case .noSchedules: return strings.newSchedule
+        case .allDisabled: return strings.reviewSchedules
+        case .allPaused: return strings.reviewAccounts
+        case .quotaUnavailable, .needsAttention, .waiting:
+            return strings.reviewSchedules
+        }
+    }
+
+    private func emptyAction() {
+        switch emptyPanelState {
+        case .allPaused:
+            open(.contas, filter: nil)
+        case .noSchedules:
+            state.newScheduleRequest = UUID()
+            open(.horarios, filter: nil)
+        case .allDisabled, .quotaUnavailable, .needsAttention, .waiting:
+            open(.horarios, filter: nil)
         }
     }
 
@@ -142,6 +290,10 @@ struct MenuPanel: View {
         }
         .buttonStyle(.plain)
         .help(strings.accountTasks)
+        .accessibilityLabel(
+            "\(event.name), \(event.account.map { state.label(for: $0) } ?? strings.command), "
+                + Fmt.eventTime(event.date, now: Date(), language: state.language)
+        )
         .onHover { hovered = $0 ? event.taskUID : nil }
     }
 
@@ -182,13 +334,13 @@ struct MenuPanel: View {
         }
     }
 
-    // MARK: - Rodapé (Tarefas · Histórico · Ajustes)
+    // MARK: - Rodapé (Agendamentos · Histórico · Ajustes)
 
     private var footer: some View {
         HStack(spacing: 7) {
             footerButton("checklist", strings.schedules) { open(.horarios, filter: nil) }
             footerButton("clock.arrow.circlepath", strings.history) { open(.historico, filter: nil) }
-            footerButton("gearshape", strings.settingsShort) { open(.geral, filter: nil) }
+            footerButton("gearshape", strings.settingsShort) { openSettings() }
         }
         .padding(.top, 3)
         .overlay(alignment: .top) { Divider().offset(y: -3) }
@@ -199,6 +351,8 @@ struct MenuPanel: View {
         Button(action: action) {
             Label(title, systemImage: symbol)
                 .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
                 .frame(maxWidth: .infinity, minHeight: 30)
                 .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
         }
@@ -211,6 +365,17 @@ struct MenuPanel: View {
         state.accountFilter = filter
         state.settingsSection = section
         openWindow(id: "schedule")
+        NSApp.activate(ignoringOtherApps: true)
+        closePanel()
+    }
+
+    private func openSettings() {
+        AppWindowActions.openSettings()
+        closePanel()
+    }
+
+    private func openPermissions() {
+        openWindow(id: "permissions")
         NSApp.activate(ignoringOtherApps: true)
         closePanel()
     }
