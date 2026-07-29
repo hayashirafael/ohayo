@@ -16,6 +16,9 @@ struct HorariosView: View {
     /// Agendamento aguardando confirmação de exclusão (excluir não tem undo).
     @State private var pendingDelete: ScheduledTask? = nil
     private var strings: L10n { state.strings }
+    private var editor: AgendamentoEditor {
+        AgendamentoEditor(state: state)
+    }
 
     var body: some View {
         Group {
@@ -64,12 +67,19 @@ struct HorariosView: View {
 
     // MARK: Linhas resolvidas contra o estado
 
+    static func accountIdentity(
+        for task: ScheduledTask,
+        in state: AppState
+    ) -> URL? {
+        state.intendedAccountDir(for: task)
+    }
+
     /// Linhas com conta/rótulo/próximo disparo resolvidos — entrada do modelo.
     /// Já escopadas pelo deep-link de conta do painel (`accountFilter`), que
     /// funciona como um escopo externo sobre a tela toda (chip no header).
     private var rows: [HorariosRow] {
         state.tasks.filter { state.taskMatchesFilter($0) }.map { task in
-            let dir = state.accountDir(for: task)
+            let dir = Self.accountIdentity(for: task, in: state)
             return HorariosRow(task: task,
                                accountPath: dir?.standardizedFileURL.path,
                                accountLabel: dir.map { state.label(for: $0) },
@@ -87,8 +97,21 @@ struct HorariosView: View {
         guard task.enabled else { return nil }
         switch task.repetition {
         case .continuous:
-            guard let dir = state.accountDir(for: task),
-                  let next = state.nextRenewals[dir], next > Date() else { return nil }
+            guard let phase = state.renewalSnapshot[task.uid]?.phase else {
+                return nil
+            }
+            let next: Date?
+            switch phase {
+            case .scheduled(let date),
+                 .cooldown(let date, _),
+                 .retry(let date, _, _):
+                next = date
+            case .paused, .accountMissing, .conflict,
+                 .invalidConfiguration, .waitingForWindow,
+                 .dispatching, .quotaUnavailable, .needsAttention:
+                next = nil
+            }
+            guard let next, next > Date() else { return nil }
             return next
         case .fixed:
             guard let next = state.nextTaskFires[task.uid], next > Date() else { return nil }
@@ -273,7 +296,7 @@ struct HorariosView: View {
             }
             Spacer(minLength: 8)
             if msg.kind != .shell, let cfg = msg.configDir, !cfg.isEmpty,
-               row.accountPath == nil {
+               state.accountDir(for: task) == nil {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(.orange)
                     .help(strings.accountFolderMissing)
@@ -341,8 +364,9 @@ struct HorariosView: View {
     }
 
     private func remove(_ task: ScheduledTask) {
-        state.tasks.removeAll { $0.uid == task.uid }
-        expanded.remove(task.uid)
+        if case .success = editor.apply(.delete(id: task.uid)) {
+            expanded.remove(task.uid)
+        }
     }
 
     // MARK: Textos auxiliares
@@ -375,7 +399,7 @@ struct HorariosView: View {
         let msg = task.resolvedCommand
         guard msg.kind != .shell else { return nil }
         var parts: [String] = []
-        if let dir = state.accountDir(for: task) {
+        if let dir = Self.accountIdentity(for: task, in: state) {
             parts.append(state.label(for: dir))
         } else {
             parts.append(msg.kind == .claude ? strings.globalDefault : strings.codexDefault)
@@ -408,32 +432,39 @@ struct HorariosView: View {
         guard row.task.enabled else { return nil }
         switch row.task.repetition {
         case .continuous:
-            if let path = row.accountPath,
-               state.quotaUnavailableReasons[
-                   URL(fileURLWithPath: path).standardizedFileURL
-               ] != nil {
+            guard let phase = state.renewalSnapshot[row.task.uid]?.phase else {
+                return strings.waitingForWindow
+            }
+            switch phase {
+            case .quotaUnavailable:
                 return strings.quotaUnavailable
-            }
-            if let path = row.accountPath,
-               state.renewalNeedsAttention.contains(
-                   URL(fileURLWithPath: path).standardizedFileURL
-               ) {
+            case .needsAttention:
                 return strings.needsAttention
-            }
-            guard let next = row.nextFire else { return strings.waitingForWindow }
-            switch state.renewalRecoveryState(for: row.task) {
-            case .retry:
+            case .accountMissing:
+                return strings.accountFolderMissing
+            case .conflict:
+                return strings.continuousConflict
+            case .paused:
+                return strings.pausedBadge
+            case .invalidConfiguration:
+                return strings.invalidContinuousConfiguration
+            case .dispatching:
+                return strings.dispatchingRenewal
+            case .waitingForWindow:
+                return strings.waitingForWindow
+            case .retry(let next, _, _):
                 return strings.retriesAt(
                     Fmt.hhmm(next, language: state.language)
                 )
-            case .cooldown:
+            case .cooldown(let next, _):
                 return strings.mayTryAt(
                     Fmt.hhmm(next, language: state.language)
                 )
-            case .needsAttention, .none:
-                break
+            case .scheduled(let next):
+                return strings.renewsAt(
+                    Fmt.hhmm(next, language: state.language)
+                )
             }
-            return strings.renewsAt(Fmt.hhmm(next, language: state.language))
         case .fixed:
             guard let next = row.nextFire else { return nil }
             return strings.nextAt(Fmt.weekdayTime(next, language: state.language))
@@ -449,7 +480,16 @@ struct HorariosView: View {
         Binding(
             get: { state.tasks.first { $0.uid == task.uid }?.enabled ?? false },
             set: { on in
-                if !state.setTaskEnabled(task, on) { conflictAlert = true }
+                let result = editor.apply(
+                    .setEnabled(id: task.uid, enabled: on)
+                )
+                if case .failure(.invalid(let issues)) = result,
+                   issues.contains(where: {
+                       if case .continuousConflict = $0 { return true }
+                       return false
+                   }) {
+                    conflictAlert = true
+                }
             })
     }
 }

@@ -271,8 +271,12 @@ private actor DoctorAuthFake: AuthenticationChecking {
         self.defaultStatus = defaultStatus
     }
 
-    func status(for provider: Provider, configDir: URL) async -> AuthenticationStatus {
-        calls.append("\(provider.rawValue):\(configDir.path)")
+    func status(
+        for account: ProviderAccountContext
+    ) async -> AuthenticationStatus {
+        calls.append(
+            "\(account.provider.rawValue):\(account.configDirectory.path)"
+        )
         return defaultStatus
     }
 }
@@ -285,9 +289,11 @@ private actor DoctorMappedAuthFake: AuthenticationChecking {
         self.statuses = statuses
     }
 
-    func status(for provider: Provider, configDir: URL) async -> AuthenticationStatus {
-        calls.append(configDir.path)
-        return statuses[configDir.path] ?? .unknown
+    func status(
+        for account: ProviderAccountContext
+    ) async -> AuthenticationStatus {
+        calls.append(account.configDirectory.path)
+        return statuses[account.configDirectory.path] ?? .unknown
     }
 }
 

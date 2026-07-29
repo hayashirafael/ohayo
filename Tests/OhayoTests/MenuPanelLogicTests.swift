@@ -196,6 +196,42 @@ final class MenuPanelLogicTests: XCTestCase {
         XCTAssertEqual(state, .waiting)
     }
 
+    func testEmptyStateDistingueConflitoContinuo() {
+        let t = task(repetition: .continuous)
+        let state = MenuPanelLogic.emptyState(
+            tasks: [t],
+            accountDir: { _ in self.contaA },
+            isPaused: { _ in false },
+            continuousPhase: { _ in .conflict }
+        )
+
+        XCTAssertEqual(state, .conflict)
+    }
+
+    func testEmptyStateDistinguePastaDeContaAusente() {
+        let t = task(repetition: .continuous)
+        let state = MenuPanelLogic.emptyState(
+            tasks: [t],
+            accountDir: { _ in nil },
+            isPaused: { _ in false },
+            continuousPhase: { _ in .accountMissing }
+        )
+
+        XCTAssertEqual(state, .accountMissing)
+    }
+
+    func testEmptyStateDistingueConfiguracaoContinuaInvalida() {
+        let t = task(kind: .shell, repetition: .continuous)
+        let state = MenuPanelLogic.emptyState(
+            tasks: [t],
+            accountDir: { _ in nil },
+            isPaused: { _ in false },
+            continuousPhase: { _ in .invalidConfiguration }
+        )
+
+        XCTAssertEqual(state, .invalidConfiguration)
+    }
+
     func testEmptyStateDistingueQuotaIndisponivel() {
         let t = task(repetition: .continuous)
         let state = MenuPanelLogic.emptyState(

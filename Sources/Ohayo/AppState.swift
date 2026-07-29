@@ -23,7 +23,11 @@ final class AppState: ObservableObject {
     /// Todas as contas agendadas pausadas (e existe ao menos uma) — esmaece o
     /// glifo da barra.
     var allScheduledAccountsPaused: Bool {
-        let dirs = Set(tasks.filter { $0.enabled }.compactMap { accountDir(for: $0) })
+        let dirs = Set(
+            tasks.filter(\.enabled).compactMap {
+                intendedAccountDir(for: $0)
+            }
+        )
         return !dirs.isEmpty && dirs.allSatisfy { isPaused($0) }
     }
 
@@ -294,6 +298,13 @@ final class AppState: ObservableObject {
                 // que a pessoa acabou de alterar.
                 if let previous = oldByUID[task.uid],
                    previous.renewalRevision != task.renewalRevision {
+                    // Cooldown não é outcome da revisão anterior: é uma lease
+                    // conservadora de que um hand-off pode já ter chegado ao
+                    // CLI. Na mesma UID/conta ela precisa sobreviver à edição
+                    // para não duplicar o disparo após restart.
+                    if case .cooldown = state {
+                        return true
+                    }
                     return false
                 }
                 return true
@@ -301,9 +312,9 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Evita duplicar um bootstrap logo após restart enquanto o Terminal/CLI
-    /// ainda pode estar iniciando ou antes de o transcript aparecer.
-    static let bootstrapCooldown: TimeInterval = 5 * 3600
+    /// Janela da persistência legada de tentativas de bootstrap. Mantida
+    /// somente para migrar o blob antigo ao recovery tipado.
+    private static let legacyBootstrapCooldown: TimeInterval = 5 * 3600
 
     private var renewalRecoveryStates: [String: RenewalRecoveryState] {
         didSet {
@@ -312,57 +323,6 @@ final class AppState: ObservableObject {
                 forKey: Keys.renewalRecoveryStates
             )
         }
-    }
-
-    func shouldBootstrap(
-        _ task: ScheduledTask,
-        now: Date = Date()
-    ) -> Bool {
-        guard task.resolvedBootstrapWhenInactive,
-              let key = continuousKey(for: task) else {
-            return false
-        }
-        switch renewalRecoveryStates[key] {
-        case .none:
-            return true
-        case .cooldown(let notBefore, _):
-            return now >= notBefore
-        case .retry, .needsAttention:
-            return false
-        }
-    }
-
-    func bootstrapNotBefore(_ task: ScheduledTask) -> Date? {
-        guard task.resolvedBootstrapWhenInactive,
-              let key = continuousKey(for: task),
-              case .cooldown(let notBefore, _) = renewalRecoveryStates[key] else {
-            return nil
-        }
-        return notBefore
-    }
-
-    func recordBootstrapAttempt(
-        _ task: ScheduledTask,
-        at date: Date = Date()
-    ) {
-        setRenewalRecoveryState(
-            .cooldown(
-                notBefore: date.addingTimeInterval(Self.bootstrapCooldown),
-                bootstrapOrigin: true
-            ),
-            for: task
-        )
-    }
-
-    /// Adapter legado: remove somente recovery originado por bootstrap. O
-    /// engine novo grava retry/cooldown tipados via
-    /// `setRenewalRecoveryState(_:for:)`.
-    func clearBootstrapAttempt(_ task: ScheduledTask) {
-        guard let key = continuousKey(for: task),
-              renewalRecoveryStates[key]?.bootstrapOrigin == true else {
-            return
-        }
-        renewalRecoveryStates[key] = nil
     }
 
     func renewalRecoveryState(
@@ -553,14 +513,9 @@ final class AppState: ObservableObject {
         registeredAccountProviders[key] = nil
         providerCache[key] = nil
         aliases[key] = nil
-        for i in tasks.indices {
-            if let cfg = tasks[i].resolvedCommand.configDir,
-               ProviderAccountContext.canonicalAccountDirectory(
-                   URL(fileURLWithPath: cfg)
-               ).path == key {
-                tasks[i].enabled = false
-            }
-        }
+        AgendamentoEditor(state: self).apply(
+            .disableAccount(URL(fileURLWithPath: key))
+        )
     }
 
     /// Apelido opcional por conta (chave = path padronizado). Independente da
@@ -608,35 +563,6 @@ final class AppState: ObservableObject {
         return tasks.filter {
             $0.enabled && intendedAccountDir(for: $0) == key
         }.count
-    }
-
-    /// Já existe outro agendamento contínuo habilitado mirando a mesma conta?
-    /// (Dois contínuos na mesma conta disparariam em dobro a cada janela.)
-    func hasContinuousConflict(_ candidate: ScheduledTask) -> Bool {
-        guard candidate.enabled,
-              candidate.repetition == .continuous,
-              let dir = intendedAccountDir(for: candidate) else {
-            return false
-        }
-        return tasks.contains {
-            $0.uid != candidate.uid && $0.enabled && $0.repetition == .continuous
-                && intendedAccountDir(for: $0) == dir
-        }
-    }
-
-    /// Habilita/desabilita um agendamento. Recusa (retorna false) apenas quando
-    /// habilitar criaria um segundo contínuo habilitado na mesma conta — o
-    /// mesmo guard do formulário, agora também no toggle da lista.
-    @discardableResult
-    func setTaskEnabled(_ task: ScheduledTask, _ on: Bool) -> Bool {
-        guard let idx = tasks.firstIndex(where: { $0.uid == task.uid }) else { return false }
-        if on, tasks[idx].repetition == .continuous {
-            var enabledCandidate = tasks[idx]
-            enabledCandidate.enabled = true
-            if hasContinuousConflict(enabledCandidate) { return false }
-        }
-        tasks[idx].enabled = on
-        return true
     }
 
     /// uids de contínuos com pasta ausente já reportados — evita duplicar o
@@ -714,39 +640,14 @@ final class AppState: ObservableObject {
         alias(for: dir) ?? email(for: dir) ?? dir.lastPathComponent
     }
 
-    /// Próximas renovações por conta (espelho do RenewalEngine, para o menu e Geral).
-    @Published var nextRenewals: [URL: Date] = [:]
-
-    /// Fim da janela de 5h por conta agendada — alimentado pelo AppEnvironment
-    /// quando o painel abre (não persistido; os cards derivam o "restante").
-    @Published var windowEnds: [URL: Date] = [:]
-
-    /// Falhas fail-closed da fonte de quota, não persistidas. A UI nunca
-    /// apresenta esses casos como simples ausência de janela.
-    @Published var quotaUnavailableReasons: [URL: String] = [:]
-
-    /// Contas contínuas bloqueadas por autenticação, CLI, permissão ou
-    /// configuração. Não há timer oculto: a UI pede ação da pessoa.
-    @Published var renewalNeedsAttention: Set<URL> = []
-
-    /// Conta efetiva de uma mensagem: o override se for diretório válido, senão
-    /// a conta padrão embutida do provider da mensagem (~/.claude ou ~/.codex).
-    /// Nunca aponta para conta fantasma.
-    func effectiveConfigDir(for message: Message) -> URL {
-        let fallback = defaultConfigDirectory(
-            for: message.kind == .codex ? .codex : .claude
-        )
-        guard let path = message.configDir, !path.isEmpty else { return fallback }
-        let url = URL(fileURLWithPath: path)
-        var isDir: ObjCBool = false
-        let ok = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
-        return ProviderAccountContext.canonicalAccountDirectory(
-            ok ? url : fallback
-        )
-    }
+    /// Estado coerente de todo o lifecycle contínuo. A UI não precisa mais
+    /// combinar mapas publicados em momentos diferentes.
+    @Published var renewalSnapshot = RenewalSnapshot()
 
     private let defaults: UserDefaults
     private let homeDirectory: URL
+    var dispatchHomeDirectory: URL { homeDirectory }
+
     private enum Keys {
         static let pausedAccounts = "pausedAccounts"
         static let history = "history"
@@ -849,11 +750,15 @@ final class AppState: ObservableObject {
             guard parts.count == 2 else { continue }
             let canonical = "\(parts[0])|\(canonicalPath(String(parts[1])))"
             let state = RenewalRecoveryState.cooldown(
-                notBefore: attemptDate.addingTimeInterval(bootstrapCooldown),
+                notBefore: attemptDate.addingTimeInterval(
+                    legacyBootstrapCooldown
+                ),
                 bootstrapOrigin: true
             )
             if case .cooldown(let existing, _) = result[canonical],
-               existing >= attemptDate.addingTimeInterval(bootstrapCooldown) {
+               existing >= attemptDate.addingTimeInterval(
+                   legacyBootstrapCooldown
+               ) {
                 continue
             }
             result[canonical] = state

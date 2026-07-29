@@ -73,22 +73,48 @@ enum MenuPanelLogic {
     enum PanelEmptyState {
         case noSchedules
         case allPaused
+        case conflict
+        case accountMissing
+        case invalidConfiguration
         case quotaUnavailable
         case needsAttention
         case waiting
     }
 
-    /// Sem agendamento habilitado → noSchedules; todas as contas agendadas
-    /// pausadas → allPaused; senão está aguardando janela/data (waiting).
+    /// Prioriza bloqueios explícitos do lifecycle; depois distingue pausa,
+    /// indisponibilidade e espera normal por janela/data.
     static func emptyState(tasks: [ScheduledTask],
                            accountDir: (ScheduledTask) -> URL?,
                            isPaused: (URL) -> Bool,
                            isQuotaUnavailable: (URL) -> Bool = { _ in false },
-                           needsAttention: (URL) -> Bool = { _ in false })
+                           needsAttention: (URL) -> Bool = { _ in false },
+                           continuousPhase:
+                            (ScheduledTask) -> RenewalSnapshot.Phase? =
+                            { _ in nil })
         -> PanelEmptyState {
         let enabled = tasks.filter { $0.enabled }
         if enabled.isEmpty { return .noSchedules }
-        if enabled.contains(where: { $0.resolvedCommand.kind == .shell }) { return .waiting }
+        if enabled.contains(where: {
+            $0.repetition == .continuous
+                && continuousPhase($0) == .conflict
+        }) {
+            return .conflict
+        }
+        if enabled.contains(where: {
+            $0.repetition == .continuous
+                && continuousPhase($0) == .accountMissing
+        }) {
+            return .accountMissing
+        }
+        if enabled.contains(where: {
+            $0.repetition == .continuous
+                && continuousPhase($0) == .invalidConfiguration
+        }) {
+            return .invalidConfiguration
+        }
+        if enabled.contains(where: { $0.resolvedCommand.kind == .shell }) {
+            return .waiting
+        }
         let accounts = Set(enabled.compactMap { accountDir($0) })
         if accounts.isEmpty { return .waiting }
         if accounts.allSatisfy(isPaused) { return .allPaused }

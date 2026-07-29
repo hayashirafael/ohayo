@@ -6,21 +6,26 @@ import SwiftUI
 /// Clique numa tarefa abre Ajustes › Tarefas filtrado pela conta dela.
 struct MenuPanel: View {
     @ObservedObject var state: AppState
-    let env: AppEnvironment
     @Environment(\.openWindow) private var openWindow
     @State private var hovered: UUID?
     private var strings: L10n { state.strings }
 
     private var upcoming: [MenuPanelLogic.UpcomingEvent] {
-        MenuPanelLogic.upcomingEvents(
+        let renewal = state.renewalSnapshot
+        return MenuPanelLogic.upcomingEvents(
             tasks: state.tasks,
-            nextRenewals: state.nextRenewals, nextTaskFires: state.nextTaskFires,
+            nextRenewals: renewal.nextByAccount,
+            nextTaskFires: state.nextTaskFires,
             isPaused: { state.isPaused($0) },
             isQuotaUnavailable: {
-                state.quotaUnavailableReasons[$0.standardizedFileURL] != nil
+                renewal.quotaUnavailableReasons[
+                    $0.standardizedFileURL
+                ] != nil
             },
             needsAttention: {
-                state.renewalNeedsAttention.contains($0.standardizedFileURL)
+                renewal.needsAttentionAccounts.contains(
+                    $0.standardizedFileURL
+                )
             },
             accountDir: { state.accountDir(for: $0) },
             now: Date(), limit: state.panelUpcomingCount,
@@ -37,9 +42,6 @@ struct MenuPanel: View {
         .frame(width: 310)
         .onAppear {
             hovered = nil
-            // O painel não mostra mais a janela de 5h, mas o glifo da barra
-            // (MenuBarLabel) ainda depende de windowEnds atualizado.
-            Task { await env.refreshWindowEnds() }
         }
     }
 
@@ -91,18 +93,30 @@ struct MenuPanel: View {
     }
 
     private var emptyText: String {
+        let renewal = state.renewalSnapshot
         switch MenuPanelLogic.emptyState(
             tasks: state.tasks,
             accountDir: { state.accountDir(for: $0) },
             isPaused: { state.isPaused($0) },
             isQuotaUnavailable: {
-                state.quotaUnavailableReasons[$0.standardizedFileURL] != nil
+                renewal.quotaUnavailableReasons[
+                    $0.standardizedFileURL
+                ] != nil
             },
             needsAttention: {
-                state.renewalNeedsAttention.contains($0.standardizedFileURL)
+                renewal.needsAttentionAccounts.contains(
+                    $0.standardizedFileURL
+                )
+            },
+            continuousPhase: {
+                renewal[$0.uid]?.phase
             }) {
         case .noSchedules: return strings.noActiveSchedules
         case .allPaused: return strings.allAccountsPaused
+        case .conflict: return strings.continuousConflict
+        case .accountMissing: return strings.accountFolderMissing
+        case .invalidConfiguration:
+            return strings.invalidContinuousConfiguration
         case .quotaUnavailable: return strings.quotaUnavailable
         case .needsAttention: return strings.needsAttention
         case .waiting: return strings.waitingForWindow

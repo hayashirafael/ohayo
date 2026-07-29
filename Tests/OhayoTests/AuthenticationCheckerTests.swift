@@ -2,6 +2,16 @@ import XCTest
 @testable import Ohayo
 
 final class AuthenticationCheckerTests: XCTestCase {
+    private func context(
+        _ provider: Provider,
+        configDirectory: URL
+    ) -> ProviderAccountContext {
+        ProviderAccountContext(
+            provider: provider,
+            configDirectory: configDirectory
+        )
+    }
+
     func testClaudeNativoContinuaNativoQuandoPastaEhSymlink() throws {
         let fm = FileManager.default
         let home = fm.temporaryDirectory
@@ -43,8 +53,10 @@ final class AuthenticationCheckerTests: XCTestCase {
         let binary = makeScript("printf '{\"loggedIn\":false}\\n'; exit 1")
         let checker = CLIAuthenticationChecker(binaryLocator: { _ in binary })
 
-        let result = await checker.status(for: .claude,
-                                          configDir: URL(fileURLWithPath: "/tmp/claude-test"))
+        let result = await checker.status(for: context(
+            .claude,
+            configDirectory: URL(fileURLWithPath: "/tmp/claude-test")
+        ))
 
         XCTAssertEqual(result, .unauthenticated(log: "{\"loggedIn\":false}"))
     }
@@ -53,8 +65,10 @@ final class AuthenticationCheckerTests: XCTestCase {
         let binary = makeScript("printf '{\"loggedIn\":true}\\n'; exit 0")
         let checker = CLIAuthenticationChecker(binaryLocator: { _ in binary })
 
-        let result = await checker.status(for: .claude,
-                                          configDir: URL(fileURLWithPath: "/tmp/claude-test"))
+        let result = await checker.status(for: context(
+            .claude,
+            configDirectory: URL(fileURLWithPath: "/tmp/claude-test")
+        ))
 
         XCTAssertEqual(result, .authenticated)
     }
@@ -68,7 +82,10 @@ final class AuthenticationCheckerTests: XCTestCase {
         )
         let checker = CLIAuthenticationChecker(binaryLocator: { _ in binary })
 
-        _ = await checker.status(for: .claude, configDir: AppState.defaultConfigDir)
+        _ = await checker.status(for: context(
+            .claude,
+            configDirectory: AppState.defaultConfigDir
+        ))
 
         XCTAssertEqual(try String(contentsOf: envFile, encoding: .utf8), "<unset>")
     }
@@ -84,7 +101,10 @@ final class AuthenticationCheckerTests: XCTestCase {
         )
         let checker = CLIAuthenticationChecker(binaryLocator: { _ in binary })
 
-        _ = await checker.status(for: .claude, configDir: custom)
+        _ = await checker.status(for: context(
+            .claude,
+            configDirectory: custom
+        ))
 
         XCTAssertEqual(try String(contentsOf: envFile, encoding: .utf8), custom.path)
     }
@@ -93,8 +113,10 @@ final class AuthenticationCheckerTests: XCTestCase {
         let binary = makeScript("echo 'Not logged in' >&2; exit 1")
         let checker = CLIAuthenticationChecker(binaryLocator: { _ in binary })
 
-        let result = await checker.status(for: .codex,
-                                          configDir: URL(fileURLWithPath: "/tmp/codex-test"))
+        let result = await checker.status(for: context(
+            .codex,
+            configDirectory: URL(fileURLWithPath: "/tmp/codex-test")
+        ))
 
         XCTAssertEqual(result, .unauthenticated(log: "Not logged in"))
     }
@@ -103,8 +125,10 @@ final class AuthenticationCheckerTests: XCTestCase {
         let binary = makeScript("echo 'unsupported command' >&2; exit 2")
         let checker = CLIAuthenticationChecker(binaryLocator: { _ in binary })
 
-        let result = await checker.status(for: .claude,
-                                          configDir: URL(fileURLWithPath: "/tmp/claude-test"))
+        let result = await checker.status(for: context(
+            .claude,
+            configDirectory: URL(fileURLWithPath: "/tmp/claude-test")
+        ))
 
         XCTAssertEqual(result, .unknown)
     }
@@ -117,7 +141,10 @@ final class AuthenticationCheckerTests: XCTestCase {
             .appendingPathComponent("codex-account-\(UUID().uuidString)")
         let checker = CLIAuthenticationChecker(binaryLocator: { _ in binary })
 
-        _ = await checker.status(for: .codex, configDir: conta)
+        _ = await checker.status(for: context(
+            .codex,
+            configDirectory: conta
+        ))
 
         XCTAssertEqual(try String(contentsOf: envFile, encoding: .utf8), conta.path)
     }

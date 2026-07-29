@@ -182,10 +182,10 @@ struct SystemProviderDoctorInspector: ProviderDoctorInspecting {
         var reports: [ProviderDoctorAccountReport] = []
         for account in accounts {
             let authenticationStatus: ProviderDoctorAuthenticationStatus
-            switch await checker.status(
-                for: provider,
-                configDir: account.configDirectory
-            ) {
+            switch await checker.status(for: ProviderAccountContext(
+                provider: provider,
+                configDirectory: account.configDirectory
+            )) {
             case .authenticated:
                 authenticationStatus = .authenticated
             case .unauthenticated:
