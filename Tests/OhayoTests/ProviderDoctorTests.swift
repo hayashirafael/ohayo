@@ -141,10 +141,13 @@ final class ProviderDoctorTests: XCTestCase {
         XCTAssertEqual(model.report(for: .codex)?.cliStatus, .available)
         XCTAssertFalse(model.isRefreshing)
         let calls = await inspector.calls
-        XCTAssertEqual(calls, [
-            "claude:/Users/tester/.claude",
-            "codex:",
-        ])
+        XCTAssertEqual(
+            calls.sorted(),
+            [
+                "claude:/Users/tester/.claude",
+                "codex:",
+            ]
+        )
     }
 
     @MainActor
@@ -299,11 +302,22 @@ private actor DoctorMappedAuthFake: AuthenticationChecking {
 
 private actor DoctorInspectorFake: ProviderDoctorInspecting {
     private(set) var calls: [String] = []
+    private var codexStarted = false
+    private var claudeWaitingForCodex: CheckedContinuation<Void, Never>?
 
     func inspect(
         provider: Provider,
         accounts: [ProviderDoctorAccount]
     ) async -> ProviderDoctorReport {
+        if provider == .claude, !codexStarted {
+            await withCheckedContinuation {
+                claudeWaitingForCodex = $0
+            }
+        } else if provider == .codex {
+            codexStarted = true
+            claudeWaitingForCodex?.resume()
+            claudeWaitingForCodex = nil
+        }
         calls.append(
             "\(provider.rawValue):\(accounts.map(\.configDirectory.path).joined(separator: ","))"
         )
