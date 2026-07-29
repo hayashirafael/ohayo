@@ -17,12 +17,17 @@ struct AgendamentoFormSheet: View {
     @State private var codexPluginInventories =
         CodexPluginInventoryCache()
     @State private var commitErrorMessage: String?
+    @State private var showingAdvancedOptions: Bool
 
     init(state: AppState, editing: ScheduledTask?, onDone: @escaping () -> Void) {
         self._state = ObservedObject(wrappedValue: state)
         self.editing = editing
         self.onDone = onDone
-        _draft = State(initialValue: AgendamentoDraft(editing: editing))
+        let restored = AgendamentoDraft(editing: editing)
+        _draft = State(initialValue: restored)
+        _showingAdvancedOptions = State(
+            initialValue: Self.hasAdvancedConfiguration(restored)
+        )
     }
 
     private var strings: L10n { state.strings }
@@ -32,124 +37,39 @@ struct AgendamentoFormSheet: View {
 
     var body: some View {
         let snapshot = editor.formSnapshot(for: draft)
-        VStack(alignment: .leading, spacing: 12) {
-            Text(editing == nil ? strings.newSchedule : strings.editSchedule).font(.headline)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text(editing == nil ? strings.newSchedule : strings.editSchedule)
+                        .font(.title2.bold())
 
-            sectionHeader(strings.messageSection)
-            KindSelector(kind: kindBinding, strings: strings)
-            TextField(strings.nameOptional, text: $draft.name)
-            TextField(strings.messageOrCommand, text: $draft.text)
-            if draft.kind == .claude {
-                ClaudeConfigForm(
-                    model: $draft.model,
-                    effort: $draft.effort,
-                    safeMode: $draft.safeMode,
-                                 configDir: $draft.account,
-                                 skill: skillBinding,
-                                 availableSkills: availableSkills,
-                                 workingDir: $draft.workingDir,
-                                 accounts: state.accounts(for: .claude),
-                                 accountLabel: { state.label(for: $0) },
-                                 strings: strings)
-            }
-            if draft.kind == .codex {
-                CodexConfigForm(
-                    model: $draft.codexModel,
-                    reasoning: $draft.codexReasoning,
-                                configDir: $draft.account,
-                                skill: skillBinding,
-                                availableSkills: availableSkills,
-                                workingDir: $draft.workingDir,
-                                accounts: state.accounts(for: .codex),
-                                accountLabel: { state.label(for: $0) },
-                                strings: strings)
-            }
-            if snapshot.hasAccountUnavailableIssue {
-                Label(
-                    strings.accountFolderMissing,
-                    systemImage: "exclamationmark.triangle"
-                )
-                .font(.caption)
-                .foregroundStyle(.orange)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle(strings.none, isOn: outputModeBinding(.none))
-                    .toggleStyle(.checkbox)
-                if draft.kind != .shell {
-                    Toggle(strings.runInTerminal, isOn: outputModeBinding(.terminal))
-                        .toggleStyle(.checkbox)
-                }
-                Toggle(strings.showResponse, isOn: outputModeBinding(.response))
-                    .toggleStyle(.checkbox)
-                if AgendamentoDraft.showsTimeout(
-                    for: draft.outputMode
-                ) {
-                    TimeoutPicker(
-                        timeoutSeconds: $draft.timeoutSeconds,
-                        kind: draft.kind,
-                        strings: strings
-                    )
-                }
-                // Independente do modo de saída acima: notifica só em sucesso;
-                // com "Mostrar resposta" ligado, a notificação de resposta vence.
-                Toggle(
-                    strings.notifyOnSuccess,
-                    isOn: $draft.notifyOnSuccess
-                )
-                    .toggleStyle(.checkbox)
-            }
-            .font(.caption)
+                    commandConfiguration(snapshot: snapshot)
 
-            Divider().padding(.vertical, 2)
+                    Divider()
 
-            sectionHeader(strings.scheduleSection)
-            repetitionPicker
-            if draft.repetition == .fixed {
-                TimeChipsEditor(times: $draft.times, strings: strings)
-                weekdaysEditor
-                dayPresetsRow
-                if overlapWarning {
-                    Label(strings.overlappingWindows, systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-                if let preview = nextFirePreview {
-                    Text(preview).font(.caption).foregroundStyle(.secondary)
-                }
-            } else {
-                Text(strings.fixedContinuousDescription)
-                    .font(.caption).foregroundStyle(.secondary)
-                Toggle(
-                    strings.bootstrapWhenInactive,
-                    isOn: $draft.bootstrapWhenInactive
-                )
-                .toggleStyle(.checkbox)
-                .font(.caption)
-                Text(strings.bootstrapWhenInactiveHelp)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if snapshot.hasContinuousConflict {
-                    Label(strings.continuousConflict,
-                          systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-            }
-            Toggle(strings.enabled, isOn: $draft.enabled)
-                .toggleStyle(.checkbox)
-                .font(.caption)
+                    scheduleConfiguration(snapshot: snapshot)
 
-            HStack {
-                Spacer()
-                Button(strings.cancel) { onDone() }
-                    .keyboardShortcut(.cancelAction)
-                Button(editing == nil ? strings.add : strings.save) { commit() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!snapshot.canSave)
-                    .help(saveDisabledReason(for: snapshot.firstIssue) ?? "")
+                    Divider()
+
+                    executionConfiguration
+                    advancedConfiguration
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.top, 4)
+
+            Divider()
+
+            actionBar(snapshot: snapshot)
         }
-        .padding(20)
-        .frame(width: 420)
+        .frame(
+            minWidth: 520,
+            idealWidth: 560,
+            maxWidth: 640,
+            minHeight: 560,
+            idealHeight: 680,
+            maxHeight: 820
+        )
         .onAppear {
             // O estado (kind/account/skill/…) já nasceu correto no `init`;
             // aqui só o efeito colateral de revarrer o disco é necessário.
@@ -188,6 +108,246 @@ struct AgendamentoFormSheet: View {
             .foregroundStyle(.secondary)
     }
 
+    private func commandConfiguration(
+        snapshot: AgendamentoFormSnapshot
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader(strings.messageSection)
+            KindSelector(kind: kindBinding, strings: strings)
+            TextField(strings.nameOptional, text: $draft.name)
+            accountConfiguration
+            commandEditor
+            if snapshot.firstIssue == .emptyMessage {
+                Label(strings.saveNeedsMessage, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if snapshot.hasAccountUnavailableIssue {
+                Label(
+                    strings.accountFolderMissing,
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private var commandEditor: some View {
+        ZStack(alignment: .topLeading) {
+            TextEditor(text: $draft.text)
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .padding(4)
+            if draft.text.isEmpty {
+                Text(strings.messageOrCommand)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 8)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(minHeight: 96, idealHeight: 116)
+        .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.separator, lineWidth: 1)
+        }
+        .accessibilityLabel(strings.messageOrCommand)
+    }
+
+    @ViewBuilder
+    private var accountConfiguration: some View {
+        if draft.kind != .shell {
+            Grid(alignment: .leading, horizontalSpacing: 10) {
+                GridRow {
+                    ConfigRowLabel(strings.account)
+                    Picker("", selection: $draft.account) {
+                        if draft.kind == .claude {
+                            Text(strings.globalDefault).tag(String?.none)
+                            ForEach(state.accounts(for: .claude), id: \.self) { dir in
+                                Text(state.label(for: dir)).tag(String?.some(dir.path))
+                            }
+                        } else {
+                            Text(strings.codexDefault).tag(String?.none)
+                            ForEach(state.accounts(for: .codex), id: \.self) { dir in
+                                Text(state.label(for: dir)).tag(String?.some(dir.path))
+                            }
+                        }
+                    }
+                    .labelsHidden()
+                    .accessibilityLabel(strings.account)
+                }
+            }
+            .font(.callout)
+        }
+    }
+
+    @ViewBuilder
+    private var providerConfiguration: some View {
+        if draft.kind == .claude {
+            ClaudeConfigForm(model: $draft.model,
+                             effort: $draft.effort,
+                             safeMode: $draft.safeMode,
+                             configDir: $draft.account,
+                             skill: skillBinding,
+                             availableSkills: availableSkills,
+                             workingDir: $draft.workingDir,
+                             accounts: state.accounts(for: .claude),
+                             accountLabel: { state.label(for: $0) },
+                             strings: strings,
+                             showsAccount: false)
+        } else if draft.kind == .codex {
+            CodexConfigForm(model: $draft.codexModel,
+                            reasoning: $draft.codexReasoning,
+                            configDir: $draft.account,
+                            skill: skillBinding,
+                            availableSkills: availableSkills,
+                            workingDir: $draft.workingDir,
+                            accounts: state.accounts(for: .codex),
+                            accountLabel: { state.label(for: $0) },
+                            strings: strings,
+                            showsAccount: false)
+        }
+    }
+
+    private var advancedConfiguration: some View {
+        DisclosureGroup(
+            strings.advancedOptions,
+            isExpanded: $showingAdvancedOptions
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                providerConfiguration
+                if AgendamentoDraft.showsTimeout(
+                    for: draft.outputMode
+                ) {
+                    TimeoutPicker(
+                        timeoutSeconds: $draft.timeoutSeconds,
+                        kind: draft.kind,
+                        strings: strings
+                    )
+                }
+            }
+            .padding(.top, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.callout)
+    }
+
+    private var executionConfiguration: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker(strings.executionMode, selection: outputModeSelection) {
+                Text(strings.runInBackground).tag(OutputMode.none)
+                if draft.kind != .shell {
+                    Text(strings.runInTerminal).tag(OutputMode.terminal)
+                }
+                Text(strings.showResponse).tag(OutputMode.response)
+            }
+            .pickerStyle(.radioGroup)
+
+            Text(outputModeDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // Independente do modo de execução acima: notifica só em sucesso;
+            // ao salvar a resposta, a notificação de resposta vence.
+            Toggle(strings.notifyOnSuccess, isOn: $draft.notifyOnSuccess)
+                .toggleStyle(.checkbox)
+                .disabled(draft.outputMode == .terminal)
+                .help(
+                    draft.outputMode == .terminal
+                        ? strings.notifyOnSuccessUnavailableInTerminal
+                        : ""
+                )
+            if draft.outputMode == .terminal {
+                Text(strings.notifyOnSuccessUnavailableInTerminal)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.callout)
+    }
+
+    private var outputModeDescription: String {
+        switch draft.outputMode {
+        case .none: return strings.runInBackgroundDescription
+        case .terminal: return strings.runInTerminalDescription
+        case .response: return strings.showResponseDescription
+        }
+    }
+
+    private func scheduleConfiguration(
+        snapshot: AgendamentoFormSnapshot
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader(strings.scheduleSection)
+            repetitionPicker
+            scheduleDetails(snapshot: snapshot)
+        }
+    }
+
+    @ViewBuilder
+    private func scheduleDetails(
+        snapshot: AgendamentoFormSnapshot
+    ) -> some View {
+        if draft.repetition == .fixed {
+            TimeChipsEditor(times: $draft.times, strings: strings)
+            weekdaysEditor
+            dayPresetsRow
+            if overlapWarning {
+                Label(strings.overlappingWindows, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if let preview = nextFirePreview {
+                Text(preview)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if draft.weekdays.isEmpty {
+                Label(strings.saveNeedsDay, systemImage: "exclamationmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        } else {
+            Text(strings.fixedContinuousDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle(
+                strings.bootstrapWhenInactive,
+                isOn: $draft.bootstrapWhenInactive
+            )
+            .toggleStyle(.checkbox)
+            Text(strings.bootstrapWhenInactiveHelp)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if snapshot.hasContinuousConflict {
+                Label(strings.continuousConflict,
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func actionBar(
+        snapshot: AgendamentoFormSnapshot
+    ) -> some View {
+        HStack(spacing: 12) {
+            Toggle(strings.enabled, isOn: $draft.enabled)
+                .toggleStyle(.checkbox)
+            Spacer()
+            Button(strings.cancel) { onDone() }
+                .keyboardShortcut(.cancelAction)
+            Button(editing == nil ? strings.add : strings.save) { commit() }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!snapshot.canSave)
+                .help(saveDisabledReason(for: snapshot.firstIssue) ?? "")
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
+    }
+
     private var kindBinding: Binding<Message.Kind> {
         Binding(
             get: { draft.kind },
@@ -205,12 +365,16 @@ struct AgendamentoFormSheet: View {
         )
     }
 
-    private func outputModeBinding(_ mode: OutputMode) -> Binding<Bool> {
+    private var outputModeSelection: Binding<OutputMode> {
         Binding(
-            get: { draft.outputMode == mode },
-            set: { selected in
-                if selected { draft.outputMode = mode }
-            })
+            get: { draft.outputMode },
+            set: { mode in
+                draft.outputMode = mode
+                if mode == .terminal {
+                    draft.notifyOnSuccess = false
+                }
+            }
+        )
     }
 
     private var repetitionPicker: some View {
@@ -399,6 +563,17 @@ struct AgendamentoFormSheet: View {
         )
     }
 
+    static func hasAdvancedConfiguration(_ draft: AgendamentoDraft) -> Bool {
+        draft.model != Message.defaultModel
+            || draft.effort != Message.defaultEffort
+            || draft.safeMode != Message.defaultSafeMode
+            || !draft.codexModel.isEmpty
+            || draft.codexReasoning != nil
+            || draft.timeoutSeconds != nil
+            || draft.skill?.isEmpty == false
+            || !draft.workingDir.isEmpty
+    }
+
     private func commit() {
         switch editor.apply(.save(draft)) {
         case .success:
@@ -450,6 +625,9 @@ struct KindSelector: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(kind == value ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+        .accessibilityLabel(title)
+        .accessibilityValue(kind == value ? strings.enabled : "")
+        .accessibilityAddTraits(kind == value ? .isSelected : [])
         .background {
             if kind == value {
                 RoundedRectangle(cornerRadius: 5)

@@ -12,6 +12,7 @@ struct ClaudeConfigForm: View {
     let accounts: [URL]
     let accountLabel: (URL) -> String
     let strings: L10n
+    var showsAccount = true
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 7) {
@@ -21,6 +22,7 @@ struct ClaudeConfigForm: View {
                     ForEach(Message.Model.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 .labelsHidden()
+                .accessibilityLabel(strings.model)
             }
             GridRow {
                 ConfigRowLabel(strings.effort)
@@ -28,16 +30,20 @@ struct ClaudeConfigForm: View {
                     ForEach(Message.Effort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .labelsHidden()
+                .accessibilityLabel(strings.effort)
             }
-            GridRow {
-                ConfigRowLabel(strings.account)
-                Picker("", selection: $configDir) {
-                    Text(strings.globalDefault).tag(String?.none)
-                    ForEach(accounts, id: \.self) { dir in
-                        Text(accountLabel(dir)).tag(String?.some(dir.path))
+            if showsAccount {
+                GridRow {
+                    ConfigRowLabel(strings.account)
+                    Picker("", selection: $configDir) {
+                        Text(strings.globalDefault).tag(String?.none)
+                        ForEach(accounts, id: \.self) { dir in
+                            Text(accountLabel(dir)).tag(String?.some(dir.path))
+                        }
                     }
+                    .labelsHidden()
+                    .accessibilityLabel(strings.account)
                 }
-                .labelsHidden()
             }
             SkillPickerRows(skill: $skill, availableSkills: availableSkills, strings: strings)
             GridRow {
@@ -68,6 +74,7 @@ struct CodexConfigForm: View {
     let accounts: [URL]
     let accountLabel: (URL) -> String
     let strings: L10n
+    var showsAccount = true
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 7) {
@@ -84,16 +91,20 @@ struct CodexConfigForm: View {
                     }
                 }
                 .labelsHidden()
+                .accessibilityLabel(strings.reasoning)
             }
-            GridRow {
-                ConfigRowLabel(strings.account)
-                Picker("", selection: $configDir) {
-                    Text(strings.codexDefault).tag(String?.none)
-                    ForEach(accounts, id: \.self) { dir in
-                        Text(accountLabel(dir)).tag(String?.some(dir.path))
+            if showsAccount {
+                GridRow {
+                    ConfigRowLabel(strings.account)
+                    Picker("", selection: $configDir) {
+                        Text(strings.codexDefault).tag(String?.none)
+                        ForEach(accounts, id: \.self) { dir in
+                            Text(accountLabel(dir)).tag(String?.some(dir.path))
+                        }
                     }
+                    .labelsHidden()
+                    .accessibilityLabel(strings.account)
                 }
-                .labelsHidden()
             }
             SkillPickerRows(skill: $skill, availableSkills: availableSkills, strings: strings)
             GridRow {
@@ -188,6 +199,7 @@ struct WorkingDirectoryPicker: View {
                 Button { workingDir = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain)
                     .help(strings.clearWorkingDirectory)
+                    .accessibilityLabel(strings.clearWorkingDirectory)
             }
         }
     }
@@ -242,6 +254,7 @@ struct SkillPickerRows: View {
                 }
             }
             .labelsHidden()
+            .accessibilityLabel(strings.skillLabel)
         }
         if missing {
             GridRow {

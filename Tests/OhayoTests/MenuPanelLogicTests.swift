@@ -176,10 +176,16 @@ final class MenuPanelLogicTests: XCTestCase {
     // MARK: - emptyState
 
     func testEmptyStateSemAgendamentos() {
+        let state = MenuPanelLogic.emptyState(
+            tasks: [], accountDir: { _ in self.contaA }, isPaused: { _ in false })
+        XCTAssertEqual(state, .noSchedules)
+    }
+
+    func testEmptyStateComTodosOsAgendamentosDesabilitados() {
         let off = task(repetition: .fixed, enabled: false)
         let state = MenuPanelLogic.emptyState(
             tasks: [off], accountDir: { _ in self.contaA }, isPaused: { _ in false })
-        XCTAssertEqual(state, .noSchedules)
+        XCTAssertEqual(state, .allDisabled)
     }
 
     func testEmptyStateTodasPausadas() {

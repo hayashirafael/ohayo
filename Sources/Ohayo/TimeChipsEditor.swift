@@ -61,13 +61,18 @@ private struct TimeChip: View {
         HStack(spacing: 5) {
             Button(Fmt.minutes(minutes)) { showEditor = true }
                 .buttonStyle(.plain)
+                .accessibilityLabel(strings.editTime(Fmt.minutes(minutes)))
             if removable {
                 Button(action: onRemove) {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(.secondary)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .help(strings.removeTime(Fmt.minutes(minutes)))
+                .accessibilityLabel(strings.removeTime(Fmt.minutes(minutes)))
             }
         }
         .font(.callout.monospacedDigit())

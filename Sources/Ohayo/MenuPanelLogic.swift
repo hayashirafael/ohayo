@@ -72,6 +72,7 @@ enum MenuPanelLogic {
     /// O que o painel mostra quando não há disparo futuro a exibir.
     enum PanelEmptyState {
         case noSchedules
+        case allDisabled
         case allPaused
         case conflict
         case accountMissing
@@ -92,8 +93,9 @@ enum MenuPanelLogic {
                             (ScheduledTask) -> RenewalSnapshot.Phase? =
                             { _ in nil })
         -> PanelEmptyState {
+        if tasks.isEmpty { return .noSchedules }
         let enabled = tasks.filter { $0.enabled }
-        if enabled.isEmpty { return .noSchedules }
+        if enabled.isEmpty { return .allDisabled }
         if enabled.contains(where: {
             $0.repetition == .continuous
                 && continuousPhase($0) == .conflict

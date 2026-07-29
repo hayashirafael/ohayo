@@ -61,7 +61,10 @@ struct AgendamentoDraft: Equatable {
         codexReasoning = message.codexReasoning
         outputMode = Self.outputMode(for: message)
         timeoutSeconds = message.timeoutSeconds
-        notifyOnSuccess = message.resolvedNotifyOnSuccess
+        notifyOnSuccess = Self.effectiveNotifyOnSuccess(
+            message.resolvedNotifyOnSuccess,
+            outputMode: outputMode
+        )
         account = Self.canonicalAccountPath(message.configDir)
         skill = message.skill
         workingDir = message.workingDir ?? ""
@@ -77,6 +80,13 @@ struct AgendamentoDraft: Equatable {
 
     static func showsTimeout(for outputMode: AgendamentoOutputMode) -> Bool {
         outputMode != .terminal
+    }
+
+    static func effectiveNotifyOnSuccess(
+        _ requested: Bool,
+        outputMode: AgendamentoOutputMode
+    ) -> Bool {
+        requested && outputMode != .terminal
     }
 
     static func canonicalAccountPath(_ path: String?) -> String? {
@@ -133,7 +143,10 @@ struct AgendamentoDraft: Equatable {
                 timeoutSeconds,
                 for: kind
             ),
-            notifyOnSuccess: notifyOnSuccess ? true : nil,
+            notifyOnSuccess: Self.effectiveNotifyOnSuccess(
+                notifyOnSuccess,
+                outputMode: outputMode
+            ) ? true : nil,
             codexModel: kind == .codex && !trimmedModel.isEmpty
                 ? trimmedModel : nil,
             codexReasoning: kind == .codex ? codexReasoning : nil,

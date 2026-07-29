@@ -16,9 +16,8 @@ enum MenuBarLabelLogic {
 }
 
 /// Label da barra: glifo próprio (balão + arco de renovação) preenchido quando
-/// qualquer conta está com janela ativa; exclamação em erro; esmaecido quando
-/// pausado. Texto opcional = janela que vence primeiro entre as contas em
-/// renovação.
+/// há evidência de uma janela ativa; exclamação em erro; esmaecido quando
+/// pausado. Texto opcional = janela ativa que vence primeiro.
 struct MenuBarLabel: View {
     @ObservedObject var state: AppState
 
@@ -33,20 +32,59 @@ struct MenuBarLabel: View {
                     .monospacedDigit()
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(state.strings.menuBarAccessibilityLabel))
+        .accessibilityValue(Text(accessibilityStatus))
     }
 
-    private var soonestEnd: Date? {
+    /// Somente uma janela detectada é evidência de uso ativo. Retries e
+    /// cooldowns futuros não podem preencher o glifo.
+    var soonestEnd: Date? {
         MenuBarLabelLogic.soonestActiveWindowEnd(
             in: state.renewalSnapshot,
             after: Date()
         )
     }
 
-    private var glyphState: MenuBarGlyph.State {
+    var glyphState: MenuBarGlyph.State {
         .init(hasProblem: hasProblem, hasActiveWindow: soonestEnd != nil)
     }
 
-    private var hasProblem: Bool { !state.missingCLIs.isEmpty || lastEventFailed }
+    var hasProblem: Bool {
+        let renewal = state.renewalSnapshot
+        return !state.missingCLIs.isEmpty
+            || lastEventFailed
+            || (!state.allScheduledAccountsPaused
+                && (!renewal.quotaUnavailableReasons.isEmpty
+                    || !renewal.needsAttentionAccounts.isEmpty))
+    }
+
+    /// Valor falado pelo VoiceOver, com a mesma prioridade fail-closed usada
+    /// pelo glifo. Mantido como propriedade testável para não deixar a
+    /// acessibilidade divergir da apresentação visual.
+    var accessibilityStatus: String {
+        if let missing = state.missingCLIs.first {
+            return state.strings.cliNotFound(missing)
+        }
+        if lastEventFailed {
+            return state.strings.notificationFailureTitle
+        }
+        if state.allScheduledAccountsPaused {
+            return state.strings.menuBarStatusPaused
+        }
+        if !state.renewalSnapshot.quotaUnavailableReasons.isEmpty {
+            return state.strings.quotaUnavailable
+        }
+        if !state.renewalSnapshot.needsAttentionAccounts.isEmpty {
+            return state.strings.needsAttention
+        }
+        if let end = soonestEnd {
+            return state.strings.menuBarStatusActive(
+                Fmt.remaining(until: end, from: Date())
+            )
+        }
+        return state.strings.menuBarStatusIdle
+    }
 
     private var lastEventFailed: Bool {
         if case .failure = state.lastEvent?.result { return true }
