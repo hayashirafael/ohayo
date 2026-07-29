@@ -22,6 +22,19 @@ final class CLIProcessRuntimeTests: XCTestCase {
         return kill(pid, 0) == 0 || errno == EPERM
     }
 
+    private func processIDs(at marker: URL) -> [pid_t]? {
+        guard let contents = try? String(
+            contentsOf: marker,
+            encoding: .utf8
+        ) else {
+            return nil
+        }
+        let processIDs = contents
+            .split(separator: " ")
+            .compactMap { pid_t($0) }
+        return processIDs.count == 2 ? processIDs : nil
+    }
+
     func testCapturaOsDoisStreamsERetornaExitStatus() async {
         let runtime = SystemCLIProcessRuntime()
         let result = await runtime.run(CLIProcessRequest(
@@ -221,19 +234,19 @@ final class CLIProcessRuntimeTests: XCTestCase {
                 arguments: [
                     "-c",
                     "trap '' TERM; sleep 30 & child=$!; "
+                        + ": > '\(marker.path)'; sleep 0.05; "
                         + "printf '%d %d' \"$$\" \"$child\" > '\(marker.path)'; "
                         + "wait \"$child\"; while :; do :; done",
                 ],
                 timeout: 10
             ))
         }
+        defer { task.cancel() }
         let didStart = await waitUntil(timeout: 1) {
-            FileManager.default.fileExists(atPath: marker.path)
+            self.processIDs(at: marker) != nil
         }
         XCTAssertTrue(didStart)
-        let processIDs = try String(contentsOf: marker, encoding: .utf8)
-            .split(separator: " ")
-            .compactMap { pid_t($0) }
+        let processIDs = try XCTUnwrap(processIDs(at: marker))
         XCTAssertEqual(processIDs.count, 2)
 
         let start = Date()
