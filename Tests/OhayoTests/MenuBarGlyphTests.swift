@@ -2,6 +2,47 @@ import XCTest
 @testable import Ohayo
 
 final class MenuBarGlyphTests: XCTestCase {
+    func testFimDeJanelaAtivaIgnoraRetryECooldown() {
+        let now = Date(timeIntervalSince1970: 1_783_000_000)
+        let scheduledID = UUID()
+        let retryID = UUID()
+        let cooldownID = UUID()
+        let scheduledEnd = now.addingTimeInterval(300)
+        let account = URL(fileURLWithPath: "/tmp/menu-bar-account")
+        let snapshot = RenewalSnapshot(byTask: [
+            scheduledID: RenewalSnapshot.Entry(
+                taskID: scheduledID,
+                account: account,
+                phase: .scheduled(scheduledEnd)
+            ),
+            retryID: RenewalSnapshot.Entry(
+                taskID: retryID,
+                account: account.appendingPathComponent("retry"),
+                phase: .retry(
+                    now.addingTimeInterval(60),
+                    attempt: 1,
+                    bootstrapOrigin: true
+                )
+            ),
+            cooldownID: RenewalSnapshot.Entry(
+                taskID: cooldownID,
+                account: account.appendingPathComponent("cooldown"),
+                phase: .cooldown(
+                    now.addingTimeInterval(120),
+                    bootstrapOrigin: true
+                )
+            ),
+        ])
+
+        XCTAssertEqual(
+            MenuBarLabelLogic.soonestActiveWindowEnd(
+                in: snapshot,
+                after: now
+            ),
+            scheduledEnd
+        )
+    }
+
     // Mesma semântica do símbolo antigo: problema > janela ativa > ocioso.
     func testProblemaTemPrioridadeSobreJanelaAtiva() {
         XCTAssertEqual(MenuBarGlyph.State(hasProblem: true, hasActiveWindow: true), .problem)

@@ -1,5 +1,20 @@
 import SwiftUI
 
+enum MenuBarLabelLogic {
+    static func soonestActiveWindowEnd(
+        in snapshot: RenewalSnapshot,
+        after now: Date
+    ) -> Date? {
+        snapshot.byTask.values.compactMap { entry in
+            guard case .scheduled(let end) = entry.phase,
+                  end > now else {
+                return nil
+            }
+            return end
+        }.min()
+    }
+}
+
 /// Label da barra: glifo próprio (balão + arco de renovação) preenchido quando
 /// há evidência de uma janela ativa; exclamação em erro; esmaecido quando
 /// pausado. Texto opcional = janela ativa que vence primeiro.
@@ -22,10 +37,13 @@ struct MenuBarLabel: View {
         .accessibilityValue(Text(accessibilityStatus))
     }
 
-    /// Somente uma janela detectada é evidência de uso ativo. `nextRenewals`
-    /// também contém retries/cooldowns futuros e não pode preencher o glifo.
+    /// Somente uma janela detectada é evidência de uso ativo. Retries e
+    /// cooldowns futuros não podem preencher o glifo.
     var soonestEnd: Date? {
-        state.windowEnds.values.filter { $0 > Date() }.min()
+        MenuBarLabelLogic.soonestActiveWindowEnd(
+            in: state.renewalSnapshot,
+            after: Date()
+        )
     }
 
     var glyphState: MenuBarGlyph.State {
@@ -33,11 +51,12 @@ struct MenuBarLabel: View {
     }
 
     var hasProblem: Bool {
-        !state.missingCLIs.isEmpty
+        let renewal = state.renewalSnapshot
+        return !state.missingCLIs.isEmpty
             || lastEventFailed
             || (!state.allScheduledAccountsPaused
-                && (!state.quotaUnavailableReasons.isEmpty
-                    || !state.renewalNeedsAttention.isEmpty))
+                && (!renewal.quotaUnavailableReasons.isEmpty
+                    || !renewal.needsAttentionAccounts.isEmpty))
     }
 
     /// Valor falado pelo VoiceOver, com a mesma prioridade fail-closed usada
@@ -53,10 +72,10 @@ struct MenuBarLabel: View {
         if state.allScheduledAccountsPaused {
             return state.strings.menuBarStatusPaused
         }
-        if !state.quotaUnavailableReasons.isEmpty {
+        if !state.renewalSnapshot.quotaUnavailableReasons.isEmpty {
             return state.strings.quotaUnavailable
         }
-        if !state.renewalNeedsAttention.isEmpty {
+        if !state.renewalSnapshot.needsAttentionAccounts.isEmpty {
             return state.strings.needsAttention
         }
         if let end = soonestEnd {

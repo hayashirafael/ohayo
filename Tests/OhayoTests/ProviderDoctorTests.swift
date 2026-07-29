@@ -141,10 +141,13 @@ final class ProviderDoctorTests: XCTestCase {
         XCTAssertEqual(model.report(for: .codex)?.cliStatus, .available)
         XCTAssertFalse(model.isRefreshing)
         let calls = await inspector.calls
-        XCTAssertEqual(calls, [
-            "claude:/Users/tester/.claude",
-            "codex:",
-        ])
+        XCTAssertEqual(
+            calls.sorted(),
+            [
+                "claude:/Users/tester/.claude",
+                "codex:",
+            ]
+        )
     }
 
     @MainActor
@@ -271,8 +274,12 @@ private actor DoctorAuthFake: AuthenticationChecking {
         self.defaultStatus = defaultStatus
     }
 
-    func status(for provider: Provider, configDir: URL) async -> AuthenticationStatus {
-        calls.append("\(provider.rawValue):\(configDir.path)")
+    func status(
+        for account: ProviderAccountContext
+    ) async -> AuthenticationStatus {
+        calls.append(
+            "\(account.provider.rawValue):\(account.configDirectory.path)"
+        )
         return defaultStatus
     }
 }
@@ -285,19 +292,32 @@ private actor DoctorMappedAuthFake: AuthenticationChecking {
         self.statuses = statuses
     }
 
-    func status(for provider: Provider, configDir: URL) async -> AuthenticationStatus {
-        calls.append(configDir.path)
-        return statuses[configDir.path] ?? .unknown
+    func status(
+        for account: ProviderAccountContext
+    ) async -> AuthenticationStatus {
+        calls.append(account.configDirectory.path)
+        return statuses[account.configDirectory.path] ?? .unknown
     }
 }
 
 private actor DoctorInspectorFake: ProviderDoctorInspecting {
     private(set) var calls: [String] = []
+    private var codexStarted = false
+    private var claudeWaitingForCodex: CheckedContinuation<Void, Never>?
 
     func inspect(
         provider: Provider,
         accounts: [ProviderDoctorAccount]
     ) async -> ProviderDoctorReport {
+        if provider == .claude, !codexStarted {
+            await withCheckedContinuation {
+                claudeWaitingForCodex = $0
+            }
+        } else if provider == .codex {
+            codexStarted = true
+            claudeWaitingForCodex?.resume()
+            claudeWaitingForCodex = nil
+        }
         calls.append(
             "\(provider.rawValue):\(accounts.map(\.configDirectory.path).joined(separator: ","))"
         )

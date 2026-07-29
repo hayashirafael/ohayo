@@ -232,6 +232,13 @@ struct L10n {
              pt: "pasta da conta não encontrada")
     }
 
+    var continuousShellInvalidEvent: String {
+        text(
+            en: "shell commands cannot use continuous scheduling",
+            pt: "comandos shell não podem usar agendamento contínuo"
+        )
+    }
+
     var accountFolderMissingAccountTab: String {
         text(en: "folder not found - remove it from the list or restore the folder",
              pt: "pasta não encontrada — remova da lista ou restaure a pasta")
@@ -489,6 +496,12 @@ struct L10n {
     }
 
     var waitingForWindow: String { text(en: "waiting for window", pt: "aguardando janela") }
+    var dispatchingRenewal: String {
+        text(en: "dispatching renewal", pt: "disparando renovação")
+    }
+    var invalidContinuousConfiguration: String {
+        text(en: "invalid continuous configuration", pt: "configuração contínua inválida")
+    }
     var quotaUnavailable: String {
         text(en: "quota unavailable", pt: "cota indisponível")
     }
@@ -766,6 +779,24 @@ struct L10n {
     }
     var saveNeedsDay: String {
         text(en: "Select at least one day", pt: "Selecione ao menos um dia")
+    }
+    var scheduleCouldNotSave: String {
+        text(
+            en: "The schedule could not be saved",
+            pt: "Não foi possível salvar o agendamento"
+        )
+    }
+    var scheduleNoLongerExists: String {
+        text(
+            en: "This schedule no longer exists. Close the editor and try again.",
+            pt: "Este agendamento não existe mais. Feche o editor e tente novamente."
+        )
+    }
+    var scheduleChangedWhileEditing: String {
+        text(
+            en: "This schedule changed while it was open. Close the editor and review the latest version.",
+            pt: "Este agendamento mudou enquanto estava aberto. Feche o editor e revise a versão mais recente."
+        )
     }
 
     var expandSchedule: String {

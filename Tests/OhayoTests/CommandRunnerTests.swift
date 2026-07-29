@@ -12,6 +12,14 @@ final class CommandRunnerTests: XCTestCase {
         return url
     }
 
+    private func dispatch(_ message: Message) -> PreparedDispatch {
+        try! DispatchPreparer(
+            isDirectory: { _ in true }
+        ).prepare(
+            .direct(message, origin: .manual)
+        ).get()
+    }
+
     /// O prompt não pode aparecer em argv (visível em `ps`); Claude `-p` lê o
     /// conteúdo de stdin quando o argumento posicional é omitido.
     func testClaudeEnviaPromptPorStdinSemExpoLoNosArgumentos() async throws {
@@ -27,7 +35,9 @@ final class CommandRunnerTests: XCTestCase {
             )
         )
 
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .success(""))
 
         let captured = try String(contentsOf: argsFile, encoding: .utf8)
@@ -52,7 +62,9 @@ final class CommandRunnerTests: XCTestCase {
             )
         )
 
-        let result = await runner.run(Message(text: "bom dia", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "bom dia", kind: .claude))
+        )
         XCTAssertEqual(result, .success(""))
 
         let captured = try String(contentsOf: argsFile, encoding: .utf8)
@@ -74,7 +86,7 @@ final class CommandRunnerTests: XCTestCase {
             binaryOverride: makeScript("printf '%s\\n' \"$@\" > '\(argsFile.path)'; exit 0")
         )
         let msg = Message(text: "tarefa", kind: .claude, model: .opus, effort: .high, safeMode: false)
-        let result = await runner.run(msg)
+        let result = await runner.run(dispatch(msg))
         XCTAssertEqual(result, .success(""))
 
         let captured = try String(contentsOf: argsFile, encoding: .utf8)
@@ -98,7 +110,7 @@ final class CommandRunnerTests: XCTestCase {
             binaryOverride: makeScript("pwd -P > '\(pwdFile.path)'; exit 0")
         )
         let msg = Message(text: "1+1", kind: .claude, workingDir: dir.path)
-        let result = await runner.run(msg)
+        let result = await runner.run(dispatch(msg))
         XCTAssertEqual(result, .success(""))
         let captured = try String(contentsOf: pwdFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -106,24 +118,85 @@ final class CommandRunnerTests: XCTestCase {
                        dir.standardizedFileURL)
     }
 
-    /// Override de conta por mensagem tem prioridade sobre a conta injetada.
-    func testConfigDirDaMensagemSobrescreveInjetada() async throws {
+    func testShellUsaWorkingDirectoryDoDispatchPreparado() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prepared-wd-\(UUID().uuidString)")
+        let preparedDirectory = root.appendingPathComponent("prepared")
+        let staleMessageDirectory = root.appendingPathComponent("message")
+        try FileManager.default.createDirectory(
+            at: preparedDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: staleMessageDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let message = Message(
+            text: "pwd -P",
+            kind: .shell,
+            workingDir: staleMessageDirectory.path
+        )
+        let dispatch = PreparedDispatch(
+            message: message,
+            origin: .manual,
+            taskID: nil,
+            taskName: nil,
+            target: .shell(workingDirectory: preparedDirectory)
+        )
+        let runner = CommandRunner(
+            timeout: 5,
+            shellOverride: URL(fileURLWithPath: "/bin/sh")
+        )
+
+        let output = try await runner.run(dispatch).get()
+
+        XCTAssertEqual(
+            URL(fileURLWithPath: output).standardizedFileURL,
+            preparedDirectory.standardizedFileURL
+        )
+    }
+
+    /// O plano já preparado é a autoridade da conta; o runner não reinfere o
+    /// ambiente a partir do `configDir` cru que permanece na mensagem.
+    func testContaDoDispatchPreparadoVenceConfigDirCruDaMensagem() async throws {
         let envFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("env-\(UUID().uuidString).txt")
-        let global = FileManager.default.temporaryDirectory
-            .appendingPathComponent("global-\(UUID().uuidString)")
-        let daMensagem = FileManager.default.temporaryDirectory
+        let preparedAccount = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prepared-\(UUID().uuidString)")
+        let rawMessageAccount = FileManager.default.temporaryDirectory
             .appendingPathComponent("msg-\(UUID().uuidString)")
         let runner = CommandRunner(
             timeout: 5,
-            binaryOverride: makeScript("printf '%s' \"$CLAUDE_CONFIG_DIR\" > '\(envFile.path)'; exit 0"),
-            configDir: global
+            binaryOverride: makeScript(
+                "printf '%s' \"$CLAUDE_CONFIG_DIR\" > '\(envFile.path)'; exit 0"
+            )
         )
-        let msg = Message(text: "1+1", kind: .claude, configDir: daMensagem.path)
-        let result = await runner.run(msg)
+        let message = Message(
+            text: "1+1",
+            kind: .claude,
+            configDir: rawMessageAccount.path
+        )
+        let account = ProviderAccountContext(
+            provider: .claude,
+            configDirectory: preparedAccount
+        )
+        let prepared = PreparedDispatch(
+            message: message,
+            origin: .manual,
+            taskID: nil,
+            taskName: nil,
+            target: .provider(ProviderDispatchPlan(
+                message: message,
+                account: account
+            ))
+        )
+
+        let result = await runner.run(prepared)
+
         XCTAssertEqual(result, .success(""))
         let captured = try String(contentsOf: envFile, encoding: .utf8)
-        XCTAssertEqual(captured, daMensagem.path)
+        XCTAssertEqual(captured, preparedAccount.path)
     }
 
     /// Modo comando cru: sem prefixo do Claude, roda via shell de login
@@ -137,7 +210,9 @@ final class CommandRunnerTests: XCTestCase {
             shellOverride: makeScript("printf '%s\\n' \"$@\" > '\(argsFile.path)'; exit 0")
         )
 
-        let result = await runner.run(Message(text: "echo oi", kind: .shell))
+        let result = await runner.run(
+            dispatch(Message(text: "echo oi", kind: .shell))
+        )
         XCTAssertEqual(result, .success(""))
 
         let captured = try String(contentsOf: argsFile, encoding: .utf8)
@@ -157,13 +232,12 @@ final class CommandRunnerTests: XCTestCase {
             shellOverride: makeScript(
                 "printf '%s|%s' \"${CLAUDE_CONFIG_DIR-<unset>}\" "
                     + "\"${CODEX_HOME-<unset>}\" > '\(envFile.path)'; exit 0"
-            ),
-            configDir: URL(fileURLWithPath: "/tmp/nao-deve-vazar")
+            )
         )
         var message = Message(text: "echo oi", kind: .shell)
         message.configDir = "/tmp/tambem-nao-deve-vazar"
 
-        let result = await runner.run(message)
+        let result = await runner.run(dispatch(message))
 
         XCTAssertEqual(result, .success(""))
         XCTAssertEqual(
@@ -181,10 +255,16 @@ final class CommandRunnerTests: XCTestCase {
             .appendingPathComponent("conta-\(UUID().uuidString)")
         let runner = CommandRunner(
             timeout: 5,
-            binaryOverride: makeScript("printf '%s' \"$CLAUDE_CONFIG_DIR\" > '\(envFile.path)'; exit 0"),
-            configDir: conta
+            binaryOverride: makeScript(
+                "printf '%s' \"$CLAUDE_CONFIG_DIR\" > '\(envFile.path)'; exit 0"
+            )
         )
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let message = Message(
+            text: "1+1",
+            kind: .claude,
+            configDir: conta.path
+        )
+        let result = await runner.run(dispatch(message))
         XCTAssertEqual(result, .success(""))
         let captured = try String(contentsOf: envFile, encoding: .utf8)
         XCTAssertEqual(captured, conta.path)
@@ -199,13 +279,15 @@ final class CommandRunnerTests: XCTestCase {
         defer { unsetenv("CLAUDE_CONFIG_DIR") }
         let envFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("env-\(UUID().uuidString).txt")
-        let runner = CommandRunner( // configDir nil -> default
+        let runner = CommandRunner(
             timeout: 5,
             binaryOverride: makeScript(
                 "printf '%s' \"${CLAUDE_CONFIG_DIR-<unset>}\" > '\(envFile.path)'; exit 0"
             )
         )
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .success(""))
         let captured = try String(contentsOf: envFile, encoding: .utf8)
         XCTAssertEqual(captured, "<unset>")
@@ -214,19 +296,25 @@ final class CommandRunnerTests: XCTestCase {
     func testCapturaStdoutNoSucesso() async {
         let runner = CommandRunner(timeout: 5,
                                   binaryOverride: makeScript("echo 'resposta do claude'; exit 0"))
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .success("resposta do claude"))
     }
 
     func testSucessoQuandoExitZero() async {
         let runner = CommandRunner(timeout: 5, binaryOverride: makeScript("exit 0"))
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .success(""))
     }
 
     func testFalhaCapturaStderr() async {
         let runner = CommandRunner(timeout: 5, binaryOverride: makeScript("echo boom >&2; exit 1"))
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .failure(.failed("boom")))
     }
 
@@ -235,7 +323,9 @@ final class CommandRunnerTests: XCTestCase {
             timeout: 5,
             binaryOverride: makeScript("printf 'Not logged in · Please run /login\\n'; exit 1")
         )
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .failure(.failed("Not logged in · Please run /login")))
     }
 
@@ -244,19 +334,25 @@ final class CommandRunnerTests: XCTestCase {
             timeout: 5,
             binaryOverride: makeScript("printf 'stdout erro\\n'; printf 'stderr erro\\n' >&2; exit 1")
         )
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .failure(.failed("stdout:\nstdout erro\n\nstderr:\nstderr erro")))
     }
 
     func testFalhaSemSaidaMantemCodigoDeSaida() async {
         let runner = CommandRunner(timeout: 5, binaryOverride: makeScript("exit 7"))
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .failure(.failed("exit 7")))
     }
 
     func testTimeoutMataOProcesso() async {
         let runner = CommandRunner(timeout: 1, binaryOverride: makeScript("sleep 10"))
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .failure(.timeout))
     }
 
@@ -269,14 +365,14 @@ final class CommandRunnerTests: XCTestCase {
         )
         let start = Date()
 
-        let result = await runner.run(message)
+        let result = await runner.run(dispatch(message))
 
         XCTAssertEqual(result, .failure(.timeout))
         XCTAssertLessThan(Date().timeIntervalSince(start), 2,
                           "o timeout persistido da mensagem não foi aplicado")
     }
 
-    func testChamadaDiretaDoRunnerAplicaTimeoutMesmoSeMensagemMarcaTerminal() async {
+    func testRunnerBatchAplicaTimeoutMesmoSeMensagemMarcaTerminal() async {
         let runner = CommandRunner(binaryOverride: makeScript("sleep 2; exit 0"))
         let message = Message(
             text: "comando demorado",
@@ -286,11 +382,11 @@ final class CommandRunnerTests: XCTestCase {
         )
         let start = Date()
 
-        let result = await runner.run(message)
+        let result = await runner.run(dispatch(message))
 
         XCTAssertEqual(result, .failure(.timeout))
         XCTAssertLessThan(Date().timeIntervalSince(start), 2,
-                          "CommandRunner deve tratar toda chamada direta como batch")
+                          "CommandRunner deve tratar todo dispatch recebido como batch")
     }
 
     func testTimeoutInjetadoNoRunnerTemPrioridadeSobreTimeoutDaMensagem() async {
@@ -305,7 +401,7 @@ final class CommandRunnerTests: XCTestCase {
         )
         let start = Date()
 
-        let result = await runner.run(message)
+        let result = await runner.run(dispatch(message))
 
         XCTAssertEqual(result, .failure(.timeout))
         XCTAssertLessThan(Date().timeIntervalSince(start), 2,
@@ -321,7 +417,9 @@ final class CommandRunnerTests: XCTestCase {
             timeout: 10,
             binaryOverride: makeScript("head -c 200000 /dev/zero | tr '\\0' 'x'; exit 0")
         )
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         if case .success(let output) = result {
             XCTAssertEqual(output.count, 200000, "esperava 200000 chars, obtido \(output.count)")
             XCTAssertTrue(output.allSatisfy { $0 == "x" }, "stdout deveria conter apenas 'x'")
@@ -340,7 +438,9 @@ final class CommandRunnerTests: XCTestCase {
             timeout: 5,
             binaryOverride: makeScript("printf 'erro fatal na cli\\n' >&2; exit 3")
         )
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .failure(.failed("erro fatal na cli")))
     }
 
@@ -354,7 +454,9 @@ final class CommandRunnerTests: XCTestCase {
                 "head -c 200000 /dev/zero | tr '\\0' 'x' >&2; printf 'FIM-DA-STDERR\\n' >&2; exit 1"
             )
         )
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         if case .failure(.failed(let message)) = result {
             XCTAssertTrue(message.hasSuffix("FIM-DA-STDERR"),
                           "stderr truncado; sufixo real: \(String(message.suffix(40)))")
@@ -378,14 +480,20 @@ final class CommandRunnerTests: XCTestCase {
             timeout: 10,
             binaryOverride: makeScript("cat '\(outputFile.path)'; exit 0")
         )
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         if case .success(let output) = result {
             XCTAssertTrue(output.hasPrefix("🚀"), "o início do log deve ser preservado")
-            XCTAssertTrue(output.contains(PipeBuffer.truncationMarker),
+            XCTAssertTrue(
+                output.contains(CapturedCLIOutput.truncationMarker),
                           "o truncamento deve ficar explícito")
             XCTAssertTrue(output.hasSuffix("FIM-DO-LOG"),
                           "a cauda recente do log deve ser preservada")
-            XCTAssertLessThanOrEqual(Data(output.utf8).count, PipeBuffer.maxBytes)
+            XCTAssertLessThanOrEqual(
+                Data(output.utf8).count,
+                CommandRunner.maximumCapturedOutputBytes
+            )
         } else {
             XCTFail("esperava sucesso, obtido \(result)")
         }
@@ -402,7 +510,9 @@ final class CommandRunnerTests: XCTestCase {
             binaryOverride: makeScript("trap '' TERM; sleep 30")
         )
         let start = Date()
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         let elapsed = Date().timeIntervalSince(start)
         XCTAssertEqual(result, .failure(.timeout))
         XCTAssertLessThan(elapsed, 10, "sendHi() nao retornou em tempo limitado: \(elapsed)s")
@@ -425,7 +535,9 @@ final class CommandRunnerTests: XCTestCase {
             )
         )
 
-        let result = await runner.run(Message(text: "1+1", kind: .claude))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
         XCTAssertEqual(result, .failure(.timeout))
 
         let childPID = try XCTUnwrap(pid_t(
@@ -539,7 +651,7 @@ final class CommandRunnerTests: XCTestCase {
         msg.codexModel = "gpt-5.5"
         msg.codexReasoning = .low
         let runner = CommandRunner(binaryOverride: bin)
-        let result = await runner.run(msg)
+        let result = await runner.run(dispatch(msg))
         let output = try result.get()
         XCTAssertTrue(output.contains("exec"))
         XCTAssertTrue(output.contains("--model gpt-5.5"))
@@ -564,7 +676,9 @@ final class CommandRunnerTests: XCTestCase {
             )
         )
 
-        let result = await runner.run(Message(text: "segredo codex", kind: .codex))
+        let result = await runner.run(
+            dispatch(Message(text: "segredo codex", kind: .codex))
+        )
 
         XCTAssertEqual(result, .success(""))
         let args = try String(contentsOf: argsFile, encoding: .utf8)
@@ -585,7 +699,9 @@ final class CommandRunnerTests: XCTestCase {
             timeout: 5,
             binaryOverride: makeScript("printf '%s\\n' \"$@\" > '\(argsFile.path)'; exit 0")
         )
-        let result = await runner.run(Message(text: "1+1", kind: .codex))
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .codex))
+        )
         if case .failure(let e) = result { XCTFail("falhou: \(e)") }
         let args = try String(contentsOf: argsFile, encoding: .utf8)
             .split(separator: "\n", omittingEmptySubsequences: false)
@@ -605,7 +721,7 @@ final class CommandRunnerTests: XCTestCase {
         var msg = Message(text: "1+1", kind: .codex)
         msg.codexModel = "gpt-5.5"
         msg.codexReasoning = .high
-        _ = await runner.run(msg)
+        _ = await runner.run(dispatch(msg))
         let args = try String(contentsOf: argsFile, encoding: .utf8)
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.isEmpty }
@@ -621,7 +737,9 @@ final class CommandRunnerTests: XCTestCase {
         let script = "#!/bin/sh\necho \"HOME_CODEX:${CODEX_HOME}\""
         let bin = try makeExecutable(script)
         let runner = CommandRunner(binaryOverride: bin)
-        let output = try (await runner.run(Message(text: "1+1", kind: .codex))).get()
+        let output = try await runner.run(
+            dispatch(Message(text: "1+1", kind: .codex))
+        ).get()
         XCTAssertTrue(output.hasSuffix(".codex"))
     }
 
@@ -641,7 +759,7 @@ final class CommandRunnerTests: XCTestCase {
         )
         var msg = Message(text: "1+1", kind: .claude)
         msg.skill = "gmud"
-        let result = await runner.run(msg)
+        let result = await runner.run(dispatch(msg))
         XCTAssertEqual(result, .success(""))
 
         let captured = try String(contentsOf: argsFile, encoding: .utf8)
@@ -667,7 +785,7 @@ final class CommandRunnerTests: XCTestCase {
         )
         var msg = Message(text: "oi", kind: .codex)
         msg.skill = "gmud"
-        let result = await runner.run(msg)
+        let result = await runner.run(dispatch(msg))
         XCTAssertEqual(result, .success(""))
 
         let captured = try String(contentsOf: argsFile, encoding: .utf8)

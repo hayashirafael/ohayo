@@ -6,21 +6,26 @@ import SwiftUI
 /// Clique num agendamento abre Ohayo › Agendamentos filtrado pela conta dele.
 struct MenuPanel: View {
     @ObservedObject var state: AppState
-    let env: AppEnvironment
     @Environment(\.openWindow) private var openWindow
     @State private var hovered: UUID?
     private var strings: L10n { state.strings }
 
     private var upcoming: [MenuPanelLogic.UpcomingEvent] {
-        MenuPanelLogic.upcomingEvents(
+        let renewal = state.renewalSnapshot
+        return MenuPanelLogic.upcomingEvents(
             tasks: state.tasks,
-            nextRenewals: state.nextRenewals, nextTaskFires: state.nextTaskFires,
+            nextRenewals: renewal.nextByAccount,
+            nextTaskFires: state.nextTaskFires,
             isPaused: { state.isPaused($0) },
             isQuotaUnavailable: {
-                state.quotaUnavailableReasons[$0.standardizedFileURL] != nil
+                renewal.quotaUnavailableReasons[
+                    $0.standardizedFileURL
+                ] != nil
             },
             needsAttention: {
-                state.renewalNeedsAttention.contains($0.standardizedFileURL)
+                renewal.needsAttentionAccounts.contains(
+                    $0.standardizedFileURL
+                )
             },
             accountDir: { state.accountDir(for: $0) },
             now: Date(), limit: state.panelUpcomingCount,
@@ -37,9 +42,6 @@ struct MenuPanel: View {
         .frame(width: 340)
         .onAppear {
             hovered = nil
-            // O painel não mostra mais a janela de 5h, mas o glifo da barra
-            // (MenuBarLabel) ainda depende de windowEnds atualizado.
-            Task { await env.refreshWindowEnds() }
         }
     }
 
@@ -116,9 +118,10 @@ struct MenuPanel: View {
 
     private var panelHasProblem: Bool {
         if lastEventFailed { return true }
+        let renewal = state.renewalSnapshot
         return !state.allScheduledAccountsPaused
-            && (!state.quotaUnavailableReasons.isEmpty
-                || !state.renewalNeedsAttention.isEmpty)
+            && (!renewal.quotaUnavailableReasons.isEmpty
+                || !renewal.needsAttentionAccounts.isEmpty)
     }
 
     private var panelHealthTitle: String {
@@ -160,16 +163,25 @@ struct MenuPanel: View {
     }
 
     private var emptyPanelState: MenuPanelLogic.PanelEmptyState {
-        MenuPanelLogic.emptyState(
+        let renewal = state.renewalSnapshot
+        return MenuPanelLogic.emptyState(
             tasks: state.tasks,
             accountDir: { state.accountDir(for: $0) },
             isPaused: { state.isPaused($0) },
             isQuotaUnavailable: {
-                state.quotaUnavailableReasons[$0.standardizedFileURL] != nil
+                renewal.quotaUnavailableReasons[
+                    $0.standardizedFileURL
+                ] != nil
             },
             needsAttention: {
-                state.renewalNeedsAttention.contains($0.standardizedFileURL)
-            })
+                renewal.needsAttentionAccounts.contains(
+                    $0.standardizedFileURL
+                )
+            },
+            continuousPhase: {
+                renewal[$0.uid]?.phase
+            }
+        )
     }
 
     private var emptyContent: some View {
@@ -200,6 +212,9 @@ struct MenuPanel: View {
         case .noSchedules: return "calendar.badge.plus"
         case .allDisabled: return "pause.rectangle"
         case .allPaused: return "pause.circle"
+        case .conflict: return "exclamationmark.arrow.triangle.2.circlepath"
+        case .accountMissing: return "externaldrive.badge.exclamationmark"
+        case .invalidConfiguration: return "slider.horizontal.3"
         case .quotaUnavailable: return "exclamationmark.shield"
         case .needsAttention: return "exclamationmark.triangle"
         case .waiting: return "hourglass"
@@ -208,7 +223,9 @@ struct MenuPanel: View {
 
     private var emptyStateIsProblem: Bool {
         switch emptyPanelState {
-        case .quotaUnavailable, .needsAttention: return true
+        case .conflict, .accountMissing, .invalidConfiguration,
+             .quotaUnavailable, .needsAttention:
+            return true
         case .noSchedules, .allDisabled, .allPaused, .waiting: return false
         }
     }
@@ -218,6 +235,10 @@ struct MenuPanel: View {
         case .noSchedules: return strings.noSchedulesPanelTitle
         case .allDisabled: return strings.allSchedulesDisabledPanelTitle
         case .allPaused: return strings.allAccountsPaused
+        case .conflict: return strings.continuousConflict
+        case .accountMissing: return strings.accountFolderMissing
+        case .invalidConfiguration:
+            return strings.invalidContinuousConfiguration
         case .quotaUnavailable: return strings.quotaUnavailablePanelTitle
         case .needsAttention: return strings.needsAttentionPanelTitle
         case .waiting: return strings.waitingForWindowPanelTitle
@@ -229,6 +250,10 @@ struct MenuPanel: View {
         case .noSchedules: return strings.noSchedulesPanelDescription
         case .allDisabled: return strings.allSchedulesDisabledPanelDescription
         case .allPaused: return strings.allPausedPanelDescription
+        case .conflict: return strings.continuousConflict
+        case .accountMissing: return strings.accountFolderMissing
+        case .invalidConfiguration:
+            return strings.invalidContinuousConfiguration
         case .quotaUnavailable: return strings.quotaUnavailablePanelDescription
         case .needsAttention: return strings.needsAttentionPanelDescription
         case .waiting: return strings.waitingForWindowPanelDescription
@@ -240,7 +265,8 @@ struct MenuPanel: View {
         case .noSchedules: return strings.newSchedule
         case .allDisabled: return strings.reviewSchedules
         case .allPaused: return strings.reviewAccounts
-        case .quotaUnavailable, .needsAttention, .waiting:
+        case .conflict, .accountMissing, .invalidConfiguration,
+             .quotaUnavailable, .needsAttention, .waiting:
             return strings.reviewSchedules
         }
     }
@@ -252,7 +278,9 @@ struct MenuPanel: View {
         case .noSchedules:
             state.newScheduleRequest = UUID()
             open(.horarios, filter: nil)
-        case .allDisabled, .quotaUnavailable, .needsAttention, .waiting:
+        case .allDisabled, .conflict, .accountMissing,
+             .invalidConfiguration, .quotaUnavailable, .needsAttention,
+             .waiting:
             open(.horarios, filter: nil)
         }
     }

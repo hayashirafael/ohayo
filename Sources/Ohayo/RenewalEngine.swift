@@ -1,36 +1,158 @@
+import Combine
 import Foundation
+
+struct ContinuousScheduleDefinition: Equatable {
+    let task: ScheduledTask
+    let intendedAccount: URL?
+    let availableAccount: URL?
+    var paused: Bool
+    var recovery: RenewalRecoveryState?
+
+    init(
+        task: ScheduledTask,
+        intendedAccount: URL?,
+        availableAccount: URL?,
+        paused: Bool = false,
+        recovery: RenewalRecoveryState? = nil
+    ) {
+        self.task = task
+        self.intendedAccount = intendedAccount.map {
+            ProviderAccountContext.canonicalAccountDirectory($0)
+        }
+        self.availableAccount = availableAccount.map {
+            ProviderAccountContext.canonicalAccountDirectory($0)
+        }
+        self.paused = paused
+        self.recovery = recovery
+    }
+
+    var provider: Provider? {
+        switch task.resolvedCommand.kind {
+        case .claude: return .claude
+        case .codex: return .codex
+        case .shell: return nil
+        }
+    }
+}
+
+struct ContinuousScheduleInput: Equatable {
+    var definitions: [ContinuousScheduleDefinition]
+    var paused: Bool
+
+    init(
+        definitions: [ContinuousScheduleDefinition],
+        paused: Bool = false
+    ) {
+        self.definitions = definitions
+        self.paused = paused
+    }
+}
+
+struct RenewalSnapshot: Equatable {
+    struct Entry: Equatable {
+        let taskID: UUID
+        let account: URL?
+        let phase: Phase
+    }
+
+    enum Phase: Equatable {
+        case paused
+        case accountMissing
+        case conflict
+        case invalidConfiguration
+        case waitingForWindow
+        case scheduled(Date)
+        case dispatching
+        case cooldown(Date, bootstrapOrigin: Bool)
+        case retry(Date, attempt: Int, bootstrapOrigin: Bool)
+        case quotaUnavailable(String)
+        case needsAttention
+    }
+
+    var byTask: [UUID: Entry] = [:]
+
+    subscript(taskID: UUID) -> Entry? {
+        byTask[taskID]
+    }
+
+    var nextByAccount: [URL: Date] {
+        var result: [URL: Date] = [:]
+        for entry in byTask.values {
+            guard let account = entry.account else { continue }
+            let date: Date?
+            switch entry.phase {
+            case .scheduled(let value),
+                 .cooldown(let value, _),
+                 .retry(let value, _, _):
+                date = value
+            case .paused, .accountMissing, .conflict,
+                 .invalidConfiguration, .waitingForWindow,
+                 .dispatching, .quotaUnavailable, .needsAttention:
+                date = nil
+            }
+            if let date {
+                result[account] = date
+            }
+        }
+        return result
+    }
+
+    var quotaUnavailableReasons: [URL: String] {
+        Dictionary(uniqueKeysWithValues: byTask.values.compactMap { entry in
+            guard let account = entry.account,
+                  case .quotaUnavailable(let reason) = entry.phase else {
+                return nil
+            }
+            return (account, reason)
+        })
+    }
+
+    var needsAttentionAccounts: Set<URL> {
+        Set(byTask.values.compactMap { entry in
+            guard case .needsAttention = entry.phase else { return nil }
+            return entry.account
+        })
+    }
+}
 
 /// Encadeia janelas de 5h por conta: arma no fim da janela detectada e re-arma
 /// após cada disparo. Alimentado pelos agendamentos contínuos. Timers reais só
 /// no app; o catch-up é testado com relógio e detector fakes.
 @MainActor
-final class RenewalEngine {
+final class RenewalEngine: ObservableObject {
     enum Trigger: Equatable {
         case bootstrap
         case scheduled
     }
 
-    /// Preserva o outcome do controller até o motor: somente falha transitória
-    /// faz retry, somente entrega/conclusão arma cooldown e ação humana fica
-    /// bloqueada sem loop.
-    var onRenew: ((URL, Trigger) async -> DispatchOutcome)?
-    /// Snapshot de `nextRenewal` a cada mudança — vira "renova às HH:mm" na UI.
-    var onStatus: (([URL: Date]) -> Void)?
-    /// Motivos de indisponibilidade por conta. A UI mostra uma cópia genérica;
-    /// o motivo técnico fica disponível para diagnóstico local.
-    var onQuotaUnavailable: (([URL: String]) -> Void)?
-    var onNeedsAttention: ((Set<URL>) -> Void)?
-    var onRecoveryState: ((URL, RenewalRecoveryState?) -> Void)?
-
-    private(set) var nextRenewal: [URL: Date] = [:] {
-        didSet { onStatus?(nextRenewal) }
-    }
-    private(set) var quotaUnavailableReasons: [URL: String] = [:] {
-        didSet { onQuotaUnavailable?(quotaUnavailableReasons) }
-    }
+    private(set) var nextRenewal: [URL: Date] = [:]
+    private(set) var quotaUnavailableReasons: [URL: String] = [:]
 
     private let detector: SessionDetecting
     private let clock: Clock
+    private let dispatch:
+        (ScheduledTask, Trigger) async -> DispatchOutcome
+    private let persistRecovery:
+        (ScheduledTask, RenewalRecoveryState?) -> Void
+    @Published private(set) var snapshot = RenewalSnapshot()
+    private var lastInput: ContinuousScheduleInput?
+    private var configurationGeneration: UInt = 0
+    private var taskByAccount: [URL: ScheduledTask] = [:]
+    private var snapshotBase: [UUID: RenewalSnapshot.Entry] = [:]
+    private struct DetectionToken: Equatable {
+        let generation: UInt
+        let taskID: UUID
+        let revision: String
+        let provider: Provider
+    }
+    private struct RuntimeConfiguration {
+        let accounts: Set<URL>
+        let bootstrapAccounts: Set<URL>
+        let recoveryStates: [URL: RenewalRecoveryState]
+        let revisions: [URL: String]
+        let providers: [URL: Provider]
+        let paused: Bool
+    }
     private let dedupeInterval: TimeInterval = 120
     private let retryBaseDelay: TimeInterval
     private let retryJitter: (URL, Int) -> Double
@@ -65,9 +187,7 @@ final class RenewalEngine {
     /// Auth, CLI, permissão e configuração exigem intervenção. Enquanto não
     /// surgir evidência real ou o consentimento/configuração mudar, ticks não
     /// repetem o mesmo alerta.
-    private(set) var needsAttentionAccounts: Set<URL> = [] {
-        didSet { onNeedsAttention?(needsAttentionAccounts) }
-    }
+    private(set) var needsAttentionAccounts: Set<URL> = []
     private var retryAttempts: [URL: Int] = [:]
     private var retryNotBefore: [URL: Date] = [:]
     private var accountRevisions: [URL: String] = [:]
@@ -79,106 +199,150 @@ final class RenewalEngine {
         clock: Clock = SystemClock(),
         retryBaseDelay: TimeInterval = 60,
         bootstrapCooldown: TimeInterval = SessionDetector.blockDuration,
-        retryJitter: @escaping (URL, Int) -> Double = RenewalEngine.stableRetryJitter
+        retryJitter: @escaping (URL, Int) -> Double =
+            RenewalEngine.stableRetryJitter,
+        dispatch: @escaping (
+            ScheduledTask,
+            Trigger
+        ) async -> DispatchOutcome = { _, _ in .completed },
+        persistRecovery: @escaping (
+            ScheduledTask,
+            RenewalRecoveryState?
+        ) -> Void = { _, _ in }
     ) {
         self.detector = detector
         self.clock = clock
         self.retryBaseDelay = retryBaseDelay
         self.bootstrapCooldown = bootstrapCooldown
         self.retryJitter = retryJitter
+        self.dispatch = dispatch
+        self.persistRecovery = persistRecovery
     }
 
-    func configure(
-        accounts: Set<URL>,
-        bootstrapAccounts: Set<URL>,
-        bootstrapNotBefore: [URL: Date] = [:],
-        recoveryStates: [URL: RenewalRecoveryState]? = nil,
-        accountRevisions: [URL: String]? = nil,
-        accountProviders: [URL: Provider]? = nil,
-        paused: Bool
-    ) async {
-        let normalized = Set(accounts.map {
-            ProviderAccountContext.canonicalAccountDirectory($0)
-        })
-        let normalizedBootstrap = Set(
-            bootstrapAccounts.map {
-                ProviderAccountContext.canonicalAccountDirectory($0)
-            }
-        ).intersection(normalized)
-        let revokedBootstrap = self.bootstrapAccounts.subtracting(
-            normalizedBootstrap
-        )
-        var normalizedNotBefore: [URL: Date] = [:]
-        for (account, date) in bootstrapNotBefore {
-            let normalizedAccount =
-                ProviderAccountContext.canonicalAccountDirectory(account)
-            if normalizedBootstrap.contains(normalizedAccount) {
-                normalizedNotBefore[normalizedAccount] = max(
-                    normalizedNotBefore[normalizedAccount] ?? date,
-                    date
+    /// Entrada única do lifecycle. O caller fornece cada task contínua com sua
+    /// identidade pretendida e disponibilidade atual; conflito, pause, pasta
+    /// ausente, Provider, revisão e recovery passam a ser resolvidos juntos.
+    func synchronize(_ input: ContinuousScheduleInput) async {
+        if lastInput == input {
+            await rearmAll()
+            return
+        }
+        configurationGeneration &+= 1
+        lastInput = input
+
+        var groups: [URL: [ContinuousScheduleDefinition]] = [:]
+        var base: [UUID: RenewalSnapshot.Entry] = [:]
+        for definition in input.definitions {
+            if let account = definition.intendedAccount {
+                groups[account, default: []].append(definition)
+            } else {
+                base[definition.task.uid] = RenewalSnapshot.Entry(
+                    taskID: definition.task.uid,
+                    account: nil,
+                    phase: .invalidConfiguration
                 )
             }
         }
-        let normalizedRecoveryStates = recoveryStates.map { states in
-            var result: [URL: RenewalRecoveryState] = [:]
-            for (account, state) in states {
-                let normalizedAccount =
-                    ProviderAccountContext.canonicalAccountDirectory(account)
-                if normalized.contains(normalizedAccount) {
-                    result[normalizedAccount] = state
+
+        var tasks: [URL: ScheduledTask] = [:]
+        var activeAccounts: Set<URL> = []
+        var bootstrapAccounts: Set<URL> = []
+        var recoveryStates: [URL: RenewalRecoveryState] = [:]
+        var revisions: [URL: String] = [:]
+        var providers: [URL: Provider] = [:]
+
+        for (intendedAccount, definitions) in groups {
+            if definitions.count != 1 {
+                for definition in definitions {
+                    base[definition.task.uid] = RenewalSnapshot.Entry(
+                        taskID: definition.task.uid,
+                        account: intendedAccount,
+                        phase: .conflict
+                    )
                 }
+                continue
             }
-            return result
-        }
-        let normalizedRevisions = accountRevisions.map { revisions in
-            var result: [URL: String] = [:]
-            for (account, revision) in revisions {
-                let normalizedAccount =
-                    ProviderAccountContext.canonicalAccountDirectory(account)
-                if normalized.contains(normalizedAccount) {
-                    result[normalizedAccount] = revision
-                }
+            guard let definition = definitions.first else { continue }
+            if input.paused || definition.paused {
+                base[definition.task.uid] = RenewalSnapshot.Entry(
+                    taskID: definition.task.uid,
+                    account: intendedAccount,
+                    phase: .paused
+                )
+                continue
             }
-            return result
-        }
-        let normalizedProviders = accountProviders.map { providers in
-            var result: [URL: Provider] = [:]
-            for (account, provider) in providers {
-                let normalizedAccount =
-                    ProviderAccountContext.canonicalAccountDirectory(account)
-                if normalized.contains(normalizedAccount) {
-                    result[normalizedAccount] = provider
-                }
+            guard let account = definition.availableAccount else {
+                base[definition.task.uid] = RenewalSnapshot.Entry(
+                    taskID: definition.task.uid,
+                    account: intendedAccount,
+                    phase: .accountMissing
+                )
+                continue
             }
-            return result
+            guard account == intendedAccount else {
+                base[definition.task.uid] = RenewalSnapshot.Entry(
+                    taskID: definition.task.uid,
+                    account: intendedAccount,
+                    phase: .invalidConfiguration
+                )
+                continue
+            }
+            guard let provider = definition.provider else {
+                base[definition.task.uid] = RenewalSnapshot.Entry(
+                    taskID: definition.task.uid,
+                    account: intendedAccount,
+                    phase: .invalidConfiguration
+                )
+                continue
+            }
+
+            tasks[account] = definition.task
+            activeAccounts.insert(account)
+            revisions[account] = definition.task.renewalRevision
+            providers[account] = provider
+            if definition.task.resolvedBootstrapWhenInactive {
+                bootstrapAccounts.insert(account)
+            }
+            if let recovery = definition.recovery {
+                recoveryStates[account] = recovery
+            }
         }
+
+        taskByAccount = tasks
+        snapshotBase = base
+        await apply(RuntimeConfiguration(
+            accounts: activeAccounts,
+            bootstrapAccounts: bootstrapAccounts,
+            recoveryStates: recoveryStates,
+            revisions: revisions,
+            providers: providers,
+            paused: input.paused
+        ))
+        publishSnapshot()
+    }
+
+    private func apply(_ configuration: RuntimeConfiguration) async {
+        // `ContinuousScheduleDefinition` canonicaliza as contas na entrada;
+        // esta projeção já nasce coerente e não repete normalização por mapa.
+        let normalized = configuration.accounts
+        let normalizedBootstrap =
+            configuration.bootstrapAccounts.intersection(normalized)
+        let revokedBootstrap = self.bootstrapAccounts.subtracting(
+            normalizedBootstrap
+        )
         let removedAccounts = self.accounts.subtracting(normalized)
         self.accounts = normalized
         self.bootstrapAccounts = normalizedBootstrap
-        self.bootstrapNotBefore = normalizedNotBefore
-        self.cooldownBootstrapOrigins = Dictionary(
-            uniqueKeysWithValues: normalizedNotBefore.keys.map { ($0, true) }
-        )
-        if let normalizedRevisions {
-            self.accountRevisions = normalizedRevisions
-        } else {
-            self.accountRevisions = self.accountRevisions.filter {
-                normalized.contains($0.key)
-            }
-        }
-        if let normalizedProviders {
-            self.accountProviders = normalizedProviders
-        } else {
-            self.accountProviders = self.accountProviders.filter {
-                normalized.contains($0.key)
-            }
-        }
-        self.paused = paused
+        self.bootstrapNotBefore = [:]
+        self.cooldownBootstrapOrigins = [:]
+        self.accountRevisions = configuration.revisions
+        self.accountProviders = configuration.providers
+        self.paused = configuration.paused
         // Reconstrói o estado local a partir do snapshot autoritativo recebido
         // abaixo; limpa primeiro para não conservar bloqueios de contas
         // removidas ou revisões anteriores.
         needsAttentionAccounts.removeAll()
-        // `configure` recebe o snapshot persistido mais recente. Recria
+        // A configuração recebe o snapshot persistido mais recente. Recria
         // timers de cooldown a partir dele para não conservar um deadline
         // antigo quando a task revoga o opt-in ou muda de conta.
         for account in Array(bootstrapCooldownTimers) {
@@ -187,12 +351,13 @@ final class RenewalEngine {
             nextRenewal[account] = nil
             bootstrapCooldownTimers.remove(account)
         }
-        for account in Array(timers.keys) where paused || !normalized.contains(account) {
+        for account in Array(timers.keys)
+            where configuration.paused || !normalized.contains(account) {
             timers[account]?.invalidate()
             timers[account] = nil
             bootstrapCooldownTimers.remove(account)
         }
-        if paused {
+        if configuration.paused {
             nextRenewal = [:]
             quotaUnavailableReasons = [:]
             bootstrapCooldownTimers.removeAll()
@@ -232,37 +397,33 @@ final class RenewalEngine {
                     nextRenewal[account] = nil
                 }
             }
-            if let normalizedRecoveryStates {
-                for account in normalized {
-                    attemptedRenewal.remove(account)
-                    pendingRetry.remove(account)
-                    bootstrapRetryAccounts.remove(account)
-                    retryAttempts[account] = nil
-                    retryNotBefore[account] = nil
-                    needsAttentionAccounts.remove(account)
-                    self.bootstrapNotBefore[account] = nil
-                    self.cooldownBootstrapOrigins[account] = nil
-                }
-                for (account, recovery) in normalizedRecoveryStates {
-                    attemptedRenewal.insert(account)
-                    switch recovery {
-                    case .cooldown(let notBefore, let bootstrapOrigin):
-                        self.bootstrapNotBefore[account] = notBefore
-                        self.cooldownBootstrapOrigins[account] = bootstrapOrigin
-                    case .retry(
-                        let notBefore,
-                        let attempt,
-                        let bootstrapOrigin
-                    ):
-                        pendingRetry.insert(account)
-                        retryNotBefore[account] = notBefore
-                        retryAttempts[account] = max(1, attempt)
-                        if bootstrapOrigin {
-                            bootstrapRetryAccounts.insert(account)
-                        }
-                    case .needsAttention:
-                        needsAttentionAccounts.insert(account)
+            for account in normalized {
+                attemptedRenewal.remove(account)
+                pendingRetry.remove(account)
+                bootstrapRetryAccounts.remove(account)
+                retryAttempts[account] = nil
+                retryNotBefore[account] = nil
+                needsAttentionAccounts.remove(account)
+            }
+            for (account, recovery) in configuration.recoveryStates {
+                attemptedRenewal.insert(account)
+                switch recovery {
+                case .cooldown(let notBefore, let bootstrapOrigin):
+                    self.bootstrapNotBefore[account] = notBefore
+                    self.cooldownBootstrapOrigins[account] = bootstrapOrigin
+                case .retry(
+                    let notBefore,
+                    let attempt,
+                    let bootstrapOrigin
+                ):
+                    pendingRetry.insert(account)
+                    retryNotBefore[account] = notBefore
+                    retryAttempts[account] = max(1, attempt)
+                    if bootstrapOrigin {
+                        bootstrapRetryAccounts.insert(account)
                     }
+                case .needsAttention:
+                    needsAttentionAccounts.insert(account)
                 }
             }
         }
@@ -274,13 +435,28 @@ final class RenewalEngine {
 
     func rearmAll() async {
         guard !paused else { return }
-        for account in accounts { await rearm(account) }
+        for account in accounts {
+            await rearm(account, publishWhenFinished: false)
+        }
+        publishSnapshot()
     }
 
-    private func rearm(_ account: URL) async {
+    private func rearm(
+        _ account: URL,
+        publishWhenFinished: Bool = true
+    ) async {
+        defer {
+            if publishWhenFinished {
+                publishSnapshot()
+            }
+        }
         guard !inFlightAccounts.contains(account) else { return }
         if needsAttentionAccounts.contains(account) {
-            switch await quotaWindowState(for: account) {
+            guard let state =
+                await currentQuotaWindowState(for: account) else {
+                return
+            }
+            switch state {
             case .active(let end):
                 quotaUnavailableReasons[account] = nil
                 needsAttentionAccounts.remove(account)
@@ -298,7 +474,11 @@ final class RenewalEngine {
             // Uma execução pode ter respondido tarde e produzido evidência
             // mesmo após o runner reportar timeout. Nesse caso cancela o retry
             // antes de abrir outra janela.
-            switch await quotaWindowState(for: account) {
+            guard let state =
+                await currentQuotaWindowState(for: account) else {
+                return
+            }
+            switch state {
             case .active(let end):
                 quotaUnavailableReasons[account] = nil
                 clearRetry(for: account)
@@ -327,7 +507,11 @@ final class RenewalEngine {
            !bootstrapCooldownTimers.contains(account) {
             return
         }
-        switch await quotaWindowState(for: account) {
+        guard let state =
+            await currentQuotaWindowState(for: account) else {
+            return
+        }
+        switch state {
         case .active(let end):
             quotaUnavailableReasons[account] = nil
             clearRetry(for: account)
@@ -411,11 +595,17 @@ final class RenewalEngine {
         _ account: URL,
         bootstrapAttempt: Bool = false
     ) async {
+        defer { publishSnapshot() }
         guard !paused, accounts.contains(account) else {
             pendingRetry.remove(account)
             return
         }
         guard !inFlightAccounts.contains(account) else { return }
+        guard let task = taskByAccount[account] else {
+            needsAttentionAccounts.insert(account)
+            nextRenewal[account] = nil
+            return
+        }
         let now = clock.now
         if let last = lastRenewAt[account], now.timeIntervalSince(last) < dedupeInterval { return }
         attemptedRenewal.insert(account)
@@ -424,16 +614,17 @@ final class RenewalEngine {
         let crashSafeNotBefore = now.addingTimeInterval(bootstrapCooldown)
         bootstrapNotBefore[account] = crashSafeNotBefore
         cooldownBootstrapOrigins[account] = bootstrapAttempt
-        onRecoveryState?(
-            account,
+        emitRecovery(
             .cooldown(
                 notBefore: crashSafeNotBefore,
                 bootstrapOrigin: bootstrapAttempt
-            )
+            ),
+            for: task
         )
         let dispatchedRevision = accountRevisions[account]
         inFlightAccounts.insert(account)
-        let outcome = await onRenew?(account, trigger) ?? .completed
+        publishSnapshot()
+        let outcome = await dispatch(task, trigger)
         inFlightAccounts.remove(account)
         guard !paused, accounts.contains(account) else {
             clearRetry(for: account)
@@ -452,13 +643,15 @@ final class RenewalEngine {
             bootstrapNotBefore[account] = staleNotBefore
             cooldownBootstrapOrigins[account] = bootstrapAttempt
             nextRenewal[account] = nil
-            onRecoveryState?(
-                account,
-                .cooldown(
-                    notBefore: staleNotBefore,
-                    bootstrapOrigin: bootstrapAttempt
-                )
+            let lease = RenewalRecoveryState.cooldown(
+                notBefore: staleNotBefore,
+                bootstrapOrigin: bootstrapAttempt
             )
+            if let currentTask = taskByAccount[account] {
+                // A lease pertence ao hand-off da conta, não ao outcome antigo.
+                // Persiste na revisão corrente para sobreviver a restart.
+                emitRecovery(lease, for: currentTask)
+            }
             await rearm(account)
             return
         }
@@ -490,13 +683,13 @@ final class RenewalEngine {
             }
             retryNotBefore[account] = retryAt
             nextRenewal[account] = retryAt
-            onRecoveryState?(
-                account,
+            emitRecovery(
                 .retry(
                     notBefore: retryAt,
                     attempt: attempt,
                     bootstrapOrigin: bootstrapAttempt
-                )
+                ),
+                for: task
             )
             return
         case .needsAttention:
@@ -506,9 +699,9 @@ final class RenewalEngine {
             bootstrapNotBefore[account] = nil
             cooldownBootstrapOrigins[account] = nil
             nextRenewal[account] = nil
-            onRecoveryState?(
-                account,
-                .needsAttention(bootstrapOrigin: bootstrapAttempt)
+            emitRecovery(
+                .needsAttention(bootstrapOrigin: bootstrapAttempt),
+                for: task
             )
             return
         case .paused:
@@ -531,12 +724,12 @@ final class RenewalEngine {
         )
         bootstrapNotBefore[account] = handoffNotBefore
         cooldownBootstrapOrigins[account] = bootstrapAttempt
-        onRecoveryState?(
-            account,
+        emitRecovery(
             .cooldown(
                 notBefore: handoffNotBefore,
                 bootstrapOrigin: bootstrapAttempt
-            )
+            ),
+            for: task
         )
         await rearm(account) // encadeia
     }
@@ -551,17 +744,53 @@ final class RenewalEngine {
     private func clearDurableRecovery(for account: URL) {
         bootstrapNotBefore[account] = nil
         cooldownBootstrapOrigins[account] = nil
-        onRecoveryState?(account, nil)
+        emitRecovery(nil, for: account)
     }
 
-    private func quotaWindowState(for account: URL) async -> QuotaWindowState {
-        let provider = accountProviders[account]
-            ?? Provider.detect(at: account)
-            ?? .claude
-        return await detector.quotaWindowState(
-            account: account,
+    private func emitRecovery(
+        _ recovery: RenewalRecoveryState?,
+        for task: ScheduledTask
+    ) {
+        persistRecovery(task, recovery)
+    }
+
+    private func emitRecovery(
+        _ recovery: RenewalRecoveryState?,
+        for account: URL
+    ) {
+        if let task = taskByAccount[account] {
+            emitRecovery(recovery, for: task)
+        }
+    }
+
+    private func detectionToken(for account: URL) -> DetectionToken? {
+        guard accounts.contains(account),
+              let task = taskByAccount[account],
+              let revision = accountRevisions[account],
+              let provider = accountProviders[account] else {
+            return nil
+        }
+        return DetectionToken(
+            generation: configurationGeneration,
+            taskID: task.uid,
+            revision: revision,
             provider: provider
         )
+    }
+
+    /// O detector é suspensível. Uma edição pode trocar task/provider enquanto
+    /// a leitura está em voo; só o resultado da configuração ainda corrente
+    /// pode alterar retry, timer ou disparar um comando.
+    private func currentQuotaWindowState(
+        for account: URL
+    ) async -> QuotaWindowState? {
+        guard let token = detectionToken(for: account) else { return nil }
+        let state = await detector.quotaWindowState(
+            account: account,
+            provider: token.provider
+        )
+        guard detectionToken(for: account) == token else { return nil }
+        return state
     }
 
     /// Falha fechado: se a fonte de quota não pode ser lida com confiança,
@@ -578,6 +807,49 @@ final class RenewalEngine {
             clearRetry(for: account)
         }
         quotaUnavailableReasons[account] = reason
+    }
+
+    private func publishSnapshot() {
+        var entries = snapshotBase
+        for (account, task) in taskByAccount {
+            let phase: RenewalSnapshot.Phase
+            if let reason = quotaUnavailableReasons[account] {
+                phase = .quotaUnavailable(reason)
+            } else if needsAttentionAccounts.contains(account) {
+                phase = .needsAttention
+            } else if inFlightAccounts.contains(account) {
+                phase = .dispatching
+            } else if pendingRetry.contains(account),
+                      let retryAt =
+                        retryNotBefore[account] ?? nextRenewal[account] {
+                phase = .retry(
+                    retryAt,
+                    attempt: max(1, retryAttempts[account] ?? 1),
+                    bootstrapOrigin:
+                        bootstrapRetryAccounts.contains(account)
+                )
+            } else if bootstrapCooldownTimers.contains(account),
+                      let cooldownAt = nextRenewal[account] {
+                phase = .cooldown(
+                    cooldownAt,
+                    bootstrapOrigin:
+                        cooldownBootstrapOrigins[account] ?? false
+                )
+            } else if let scheduledAt = nextRenewal[account] {
+                phase = .scheduled(scheduledAt)
+            } else {
+                phase = .waitingForWindow
+            }
+            entries[task.uid] = RenewalSnapshot.Entry(
+                taskID: task.uid,
+                account: account,
+                phase: phase
+            )
+        }
+        let updated = RenewalSnapshot(byTask: entries)
+        if snapshot != updated {
+            snapshot = updated
+        }
     }
 
     /// Jitter estável por conta/tentativa (90–110%): evita rajadas após wake ou

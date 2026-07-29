@@ -18,6 +18,7 @@ final class FireController {
     private let authenticationChecker: AuthenticationChecking
     private let notifier: Notifying
     private let clock: Clock
+    private let preparer: DispatchPreparer
     /// Execuções da mesma conta são serializadas; contas diferentes podem
     /// avançar em paralelo. O estado anterior era um único `isRunning` global
     /// que descartava silenciosamente qualquer disparo concorrente.
@@ -25,32 +26,24 @@ final class FireController {
         case provider(Provider, account: URL)
         case shell(workingDirectory: URL?)
 
-        static func resolve(message: Message, account: URL) -> ExecutionKey {
-            switch message.kind {
-            case .claude:
+        static func resolve(_ dispatch: PreparedDispatch) -> ExecutionKey {
+            switch dispatch.target {
+            case .provider(let plan):
                 return .provider(
-                    .claude,
-                    account: ProviderAccountContext.canonicalAccountDirectory(account)
+                    plan.account.provider,
+                    account: plan.account.configDirectory
                 )
-            case .codex:
-                return .provider(
-                    .codex,
-                    account: ProviderAccountContext.canonicalAccountDirectory(account)
-                )
-            case .shell:
-                guard let path = message.workingDir,
-                      !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    return .shell(workingDirectory: nil)
-                }
-                let expanded = NSString(string: path).expandingTildeInPath
-                return .shell(
-                    workingDirectory: URL(fileURLWithPath: expanded).standardizedFileURL
-                )
+            case .shell(let workingDirectory):
+                return .shell(workingDirectory: workingDirectory)
             }
         }
     }
     private var runningKeys: Set<ExecutionKey> = []
-    private var executionWaiters: [ExecutionKey: [CheckedContinuation<Void, Never>]] = [:]
+    private struct ExecutionWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+    private var executionWaiters: [ExecutionKey: [ExecutionWaiter]] = [:]
     private let log = Logger(subsystem: "io.github.hayashirafael.Ohayo", category: "fire")
 
     static let responseLimit = 4000
@@ -58,7 +51,8 @@ final class FireController {
     init(state: AppState, detector: SessionDetecting, runner: CommandRunning,
          terminalLauncher: TerminalLaunching? = nil,
          notifier: Notifying, clock: Clock = SystemClock(),
-         authenticationChecker: AuthenticationChecking = AllowAllAuthenticationChecker()) {
+         authenticationChecker: AuthenticationChecking = AllowAllAuthenticationChecker(),
+         preparer: DispatchPreparer? = nil) {
         self.state = state
         self.detector = detector
         self.runner = runner
@@ -66,19 +60,58 @@ final class FireController {
         self.authenticationChecker = authenticationChecker
         self.notifier = notifier
         self.clock = clock
+        self.preparer = preparer ?? DispatchPreparer(
+            homeDirectory: state.dispatchHomeDirectory
+        )
     }
 
     /// Retorna um outcome de domínio para os motores distinguirem conclusão,
     /// hand-off, ação humana e falha transitória. Disparos concorrentes da
     /// mesma conta aguardam sua vez em vez de serem perdidos.
     @discardableResult
-    func fire(message: Message, origin: FireOrigin,
-              taskName: String? = nil) async -> DispatchOutcome {
-        let accountDir = state.effectiveConfigDir(for: message)
-        let account = accountDir.lastPathComponent
-        let executionKey = ExecutionKey.resolve(message: message, account: accountDir)
-        await acquireExecutionSlot(for: executionKey)
+    func fire(_ intent: DispatchIntent) async -> DispatchOutcome {
+        switch preparer.prepare(intent) {
+        case .success(let dispatch):
+            return await fire(
+                dispatch,
+                scheduledSnapshot: Self.scheduledSnapshot(for: intent)
+            )
+        case .failure(let error):
+            return block(intent, because: error)
+        }
+    }
+
+    private func fire(
+        _ dispatch: PreparedDispatch,
+        scheduledSnapshot: ScheduledTask?
+    ) async -> DispatchOutcome {
+        let message = dispatch.message
+        let origin = dispatch.origin
+        let taskName = dispatch.taskName
+        let accountDir = dispatch.accountDirectory
+        let account = accountDir?.lastPathComponent ?? "shell"
+        var eventMessage = message
+        if let accountDir {
+            // Histórico consome a mesma Account já canonicalizada que quota,
+            // autenticação e adapters; nunca reinfere `configDir` cru.
+            eventMessage.configDir = accountDir.path
+        }
+        let executionKey = ExecutionKey.resolve(dispatch)
+        guard await acquireExecutionSlot(for: executionKey) else {
+            log.info("fire: descartado — espera cancelada")
+            return .paused
+        }
         defer { releaseExecutionSlot(for: executionKey) }
+
+        guard canContinue(
+            scheduledSnapshot,
+            origin: origin
+        ) else {
+            log.info(
+                "fire: descartado — cancelado ou agendamento mudou"
+            )
+            return .paused
+        }
 
         // Conta pausada: descarta sem executar nem registrar. O outcome
         // `.paused` avança a agenda — ao retomar, vale só o próximo evento da
@@ -86,7 +119,9 @@ final class FireController {
         // Exceção: disparo manual (.manual) sobrepõe a pausa — é ação explícita
         // do usuário na tela ("Executar agora"), que sempre executa (mesma
         // semântica do shell, que nunca é pausado).
-        if origin != .manual, message.kind != .shell, state.isPaused(accountDir) {
+        if origin != .manual,
+           let accountDir,
+           state.isPaused(accountDir) {
             log.info("fire: descartado — conta pausada origin=\(String(describing: origin), privacy: .public) conta=\(account, privacy: .public)")
             return .paused
         }
@@ -96,18 +131,29 @@ final class FireController {
         // Só a renovação contínua evita um disparo redundante. Horários fixos
         // são compromissos de execução (inclusive no batch com resposta) e
         // devem rodar mesmo quando a conta já tem uma janela ativa.
-        if origin == .renewal, message.kind != .shell {
-            let provider: Provider =
-                message.kind == .codex ? .codex : .claude
-            switch await detector.quotaWindowState(
+        if origin == .renewal,
+           let accountDir,
+           let provider = dispatch.provider {
+            let quotaState = await detector.quotaWindowState(
                 account: accountDir,
                 provider: provider
-            ) {
+            )
+            guard canContinue(
+                scheduledSnapshot,
+                origin: origin,
+                account: accountDir
+            ) else {
+                log.info(
+                    "fire: descartado — agendamento mudou durante quota"
+                )
+                return .paused
+            }
+            switch quotaState {
             case .active(let end):
                 log.info("fire: renovacao pulada (janela ativa ate \(String(describing: end), privacy: .public)) conta=\(account, privacy: .public)")
                 state.recordEvent(state.makeEvent(date: clock.now,
                                                   result: .skipped(activeUntil: end),
-                                                  message: message, origin: origin))
+                                                  message: eventMessage, origin: origin))
                 return .skipped
             case .unavailable(let reason):
                 let summary = state.strings.quotaUnavailableEvent
@@ -115,7 +161,7 @@ final class FireController {
                 state.recordEvent(state.makeEvent(
                     date: clock.now,
                     result: .failure(message: summary),
-                    message: message,
+                    message: eventMessage,
                     origin: origin
                 ))
                 notifyFailure(detail: summary)
@@ -125,17 +171,30 @@ final class FireController {
             }
         }
 
-        if message.kind != .shell {
-            switch await authenticationChecker.status(for: message.kind == .codex ? .codex : .claude,
-                                                       configDir: accountDir) {
+        if let accountContext = dispatch.account {
+            let authenticationStatus =
+                await authenticationChecker.status(for: accountContext)
+            guard canContinue(
+                scheduledSnapshot,
+                origin: origin,
+                account: accountContext.configDirectory
+            ) else {
+                log.info(
+                    "fire: descartado — agendamento mudou durante autenticação"
+                )
+                return .paused
+            }
+            switch authenticationStatus {
             case .authenticated, .unknown:
                 break
             case .unauthenticated(let log):
-                let provider: Provider = message.kind == .codex ? .codex : .claude
-                let summary = state.strings.authenticationRequired(provider, configDir: accountDir)
+                let summary = state.strings.authenticationRequired(
+                    accountContext.provider,
+                    configDir: accountContext.configDirectory
+                )
                 state.recordEvent(state.makeEvent(date: clock.now,
                                                   result: .failure(message: summary),
-                                                  message: message, origin: origin,
+                                                  message: eventMessage, origin: origin,
                                                   response: log.isEmpty ? nil : String(log.prefix(Self.responseLimit))))
                 if origin != .manual {
                     notifyFailure(detail: summary)
@@ -146,15 +205,17 @@ final class FireController {
 
         if message.resolvedRunInTerminal, let terminalLauncher {
             let outcome: DispatchOutcome
-            switch await terminalLauncher.launch(message) {
+            switch await terminalLauncher.launch(dispatch) {
             case .success:
                 log.info("fire: launch terminal ok conta=\(account, privacy: .public)")
-                state.cliFound[message.kind == .codex ? .codex : .claude] = true
+                if let provider = dispatch.provider {
+                    state.cliFound[provider] = true
+                }
                 // Abrir o Terminal comprova apenas o hand-off interativo. O
                 // Ohayo não observa o exit status dessa sessão e, portanto,
                 // não pode declarar sucesso nem emitir notifyOnSuccess.
                 state.recordEvent(state.makeEvent(date: clock.now, result: .launched,
-                                                  message: message, origin: origin))
+                                                  message: eventMessage, origin: origin))
                 outcome = .launched
             case .failure(let error):
                 if case .cliNotFound(let provider) = error { state.cliFound[provider] = false }
@@ -162,7 +223,7 @@ final class FireController {
                 log.error("fire: launch terminal falhou: \(summary, privacy: .public)")
                 state.recordEvent(state.makeEvent(date: clock.now,
                                                   result: .failure(message: summary),
-                                                  message: message, origin: origin))
+                                                  message: eventMessage, origin: origin))
                 if origin != .manual {
                     notifyFailure(detail: summary)
                 }
@@ -175,14 +236,16 @@ final class FireController {
         }
 
         let outcome: DispatchOutcome
-        switch await runner.run(message) {
+        switch await runner.run(dispatch) {
         case .success(let output):
             log.info("fire: runner ok conta=\(account, privacy: .public)")
-            state.cliFound[message.kind == .codex ? .codex : .claude] = true
+            if let provider = dispatch.provider {
+                state.cliFound[provider] = true
+            }
             let response = message.resolvedShowResponse && !output.isEmpty
                 ? String(output.prefix(Self.responseLimit)) : nil
             state.recordEvent(state.makeEvent(date: clock.now, result: .success,
-                                              message: message, origin: origin,
+                                              message: eventMessage, origin: origin,
                                               response: response))
             if let response {
                 // A notificação de resposta já comunica o sucesso — não duplica.
@@ -194,7 +257,11 @@ final class FireController {
                 )
                 notifier.notifyResponse(title: content.title, response: content.body)
             } else if message.resolvedNotifyOnSuccess {
-                notifySuccess(message: message, taskName: taskName, accountDir: accountDir)
+                notifySuccess(
+                    message: message,
+                    taskName: taskName,
+                    accountDir: accountDir
+                )
             }
             outcome = .completed
         case .failure(let error):
@@ -214,7 +281,7 @@ final class FireController {
             log.error("fire: runner falhou: \(summary, privacy: .public)")
             state.recordEvent(state.makeEvent(date: clock.now,
                                               result: .failure(message: summary),
-                                              message: message, origin: origin,
+                                              message: eventMessage, origin: origin,
                                               response: detail))
             if origin != .manual {
                 notifyFailure(detail: summary)
@@ -222,6 +289,79 @@ final class FireController {
             outcome = Self.dispatchOutcome(for: error)
         }
         return outcome
+    }
+
+    private static func scheduledSnapshot(
+        for intent: DispatchIntent
+    ) -> ScheduledTask? {
+        switch intent {
+        case .agenda(let task), .renewal(let task):
+            return task
+        case .manual, .direct:
+            return nil
+        }
+    }
+
+    private func isStillCurrent(
+        _ snapshot: ScheduledTask?,
+        origin: FireOrigin
+    ) -> Bool {
+        guard let snapshot else { return true }
+        let matches = state.tasks.filter { $0.uid == snapshot.uid }
+        guard matches.count == 1,
+              let current = matches.first,
+              current.enabled,
+              current == snapshot else {
+            return false
+        }
+        switch origin {
+        case .agenda:
+            return current.repetition == .fixed
+        case .renewal:
+            return current.repetition == .continuous
+        case .manual, .scheduled:
+            return true
+        }
+    }
+
+    private func canContinue(
+        _ snapshot: ScheduledTask?,
+        origin: FireOrigin,
+        account: URL? = nil
+    ) -> Bool {
+        guard !Task.isCancelled,
+              isStillCurrent(snapshot, origin: origin) else {
+            return false
+        }
+        guard origin != .manual,
+              let account else {
+            return true
+        }
+        return !state.isPaused(account)
+    }
+
+    private func block(
+        _ intent: DispatchIntent,
+        because error: DispatchPreparationError
+    ) -> DispatchOutcome {
+        let payload = intent.payload
+        let summary: String
+        switch error {
+        case .explicitAccountMissing:
+            summary = state.strings.accountFolderMissingEvent
+        case .continuousShell:
+            summary = state.strings.continuousShellInvalidEvent
+        }
+        log.error(
+            "fire: preparação bloqueada origin=\(String(describing: payload.origin), privacy: .public)"
+        )
+        state.recordEvent(state.makeEvent(
+            date: clock.now,
+            result: .failure(message: summary),
+            message: payload.message,
+            origin: payload.origin
+        ))
+        return .needsAttention
     }
 
     /// Fail closed: só falhas reconhecidamente transitórias entram no loop de
@@ -252,15 +392,45 @@ final class FireController {
 
     /// Entrega o slot diretamente ao primeiro waiter ao liberar, preservando
     /// FIFO sem abrir uma janela em que um terceiro disparo poderia furar fila.
-    private func acquireExecutionSlot(for key: ExecutionKey) async {
+    private func acquireExecutionSlot(for key: ExecutionKey) async -> Bool {
+        guard !Task.isCancelled else { return false }
         guard runningKeys.contains(key) else {
             runningKeys.insert(key)
-            return
+            return true
         }
         log.info("fire: aguardando execucao anterior da mesma conta")
-        await withCheckedContinuation { continuation in
-            executionWaiters[key, default: []].append(continuation)
+        let waiterID = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                executionWaiters[key, default: []].append(
+                    ExecutionWaiter(
+                        id: waiterID,
+                        continuation: continuation
+                    )
+                )
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelExecutionWaiter(waiterID, for: key)
+            }
         }
+    }
+
+    private func cancelExecutionWaiter(
+        _ id: UUID,
+        for key: ExecutionKey
+    ) {
+        guard var waiters = executionWaiters[key],
+              let index = waiters.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        let cancelled = waiters.remove(at: index)
+        executionWaiters[key] = waiters.isEmpty ? nil : waiters
+        cancelled.continuation.resume(returning: false)
     }
 
     private func releaseExecutionSlot(for key: ExecutionKey) {
@@ -271,7 +441,7 @@ final class FireController {
             } else {
                 executionWaiters[key] = waiters
             }
-            next.resume()
+            next.continuation.resume(returning: true)
         } else {
             runningKeys.remove(key)
         }
@@ -281,8 +451,12 @@ final class FireController {
     /// tarefa (fallback no texto do comando), corpo "conta · HH:MM · resultado".
     /// Sem gate por origem — a flag é opt-in explícito por tarefa; a contínua
     /// notifica a cada renovação efetiva, nunca nos skips (sem hook lá).
-    private func notifySuccess(message: Message, taskName: String?, accountDir: URL) {
-        let accountLabel = message.kind == .shell ? nil : state.label(for: accountDir)
+    private func notifySuccess(
+        message: Message,
+        taskName: String?,
+        accountDir: URL?
+    ) {
+        let accountLabel = accountDir.map { state.label(for: $0) }
         let content = notificationContent(
             detailedTitle: state.strings.notificationSuccessTitle(taskName ?? message.text),
             detailedBody: state.strings.notificationSuccessBody(
@@ -328,7 +502,9 @@ final class FireController {
 }
 
 struct AllowAllAuthenticationChecker: AuthenticationChecking {
-    func status(for provider: Provider, configDir: URL) async -> AuthenticationStatus {
+    func status(
+        for account: ProviderAccountContext
+    ) async -> AuthenticationStatus {
         .authenticated
     }
 }

@@ -2,11 +2,21 @@ import XCTest
 @testable import Ohayo
 
 @MainActor
+private final class RenewalTestDriver {
+    var dispatch: (ScheduledTask, RenewalEngine.Trigger) async
+        -> DispatchOutcome = { _, _ in .completed }
+    var persistRecovery: (ScheduledTask, RenewalRecoveryState?) -> Void =
+        { _, _ in }
+}
+
+@MainActor
 final class RenewalEngineTests: XCTestCase {
     var detector: MockDetector!
     var clock: FakeClock!
     var engine: RenewalEngine!
+    private var driver: RenewalTestDriver!
     var renewed: [URL] = []
+    private var tasksByAccount: [URL: ScheduledTask] = [:]
     /// Ancorado no relógio real: os Timers do engine armam no RunLoop de
     /// verdade — datas fake no passado fariam o timer disparar durante o teste.
     let now = Date()
@@ -15,21 +25,128 @@ final class RenewalEngineTests: XCTestCase {
     override func setUp() async throws {
         detector = MockDetector()
         clock = FakeClock(now: now)
-        engine = RenewalEngine(
-            detector: detector,
-            clock: clock,
-            retryJitter: { _, _ in 1 }
-        )
+        driver = RenewalTestDriver()
+        engine = makeEngine(driver: driver)
         renewed = []
-        engine.onRenew = { [weak self] url, _ in
-            self?.renewed.append(url)
+        tasksByAccount = [:]
+        driver.dispatch = { [weak self] task, _ in
+            guard let self else { return .completed }
+            self.renewed.append(self.account(of: task))
             return .completed
         }
     }
 
+    private func makeEngine(driver: RenewalTestDriver) -> RenewalEngine {
+        RenewalEngine(
+            detector: detector,
+            clock: clock,
+            retryJitter: { _, _ in 1 },
+            dispatch: { [driver] task, trigger in
+                await driver.dispatch(task, trigger)
+            },
+            persistRecovery: { [driver] task, recovery in
+                driver.persistRecovery(task, recovery)
+            }
+        )
+    }
+
+    private func account(of task: ScheduledTask) -> URL {
+        ProviderAccountContext.canonicalAccountDirectory(
+            URL(
+                fileURLWithPath:
+                    task.resolvedCommand.configDir ?? AppState.defaultConfigDir.path
+            )
+        )
+    }
+
+    private func synchronize(
+        _ target: RenewalEngine? = nil,
+        accounts: Set<URL>,
+        bootstrapAccounts: Set<URL>,
+        cooldowns: [URL: Date] = [:],
+        recoveries: [URL: RenewalRecoveryState]? = nil,
+        revisions: [URL: String]? = nil,
+        providers: [URL: Provider]? = nil,
+        paused: Bool
+    ) async {
+        let canonicalAccounts = Set(accounts.map {
+            ProviderAccountContext.canonicalAccountDirectory($0)
+        })
+        let canonicalBootstrap = Set(bootstrapAccounts.map {
+            ProviderAccountContext.canonicalAccountDirectory($0)
+        })
+        var canonicalCooldowns: [URL: Date] = [:]
+        for (account, deadline) in cooldowns {
+            let canonical =
+                ProviderAccountContext.canonicalAccountDirectory(account)
+            canonicalCooldowns[canonical] = max(
+                canonicalCooldowns[canonical] ?? deadline,
+                deadline
+            )
+        }
+        let canonicalRecoveries = recoveries.map { values in
+            Dictionary(uniqueKeysWithValues: values.map {
+                (
+                    ProviderAccountContext.canonicalAccountDirectory($0.key),
+                    $0.value
+                )
+            })
+        }
+        let canonicalRevisions = revisions.map { values in
+            Dictionary(uniqueKeysWithValues: values.map {
+                (
+                    ProviderAccountContext.canonicalAccountDirectory($0.key),
+                    $0.value
+                )
+            })
+        }
+        let canonicalProviders = providers.map { values in
+            Dictionary(uniqueKeysWithValues: values.map {
+                (
+                    ProviderAccountContext.canonicalAccountDirectory($0.key),
+                    $0.value
+                )
+            })
+        }
+
+        let definitions = canonicalAccounts.map { account in
+            let provider = canonicalProviders?[account] ?? .claude
+            let uid = tasksByAccount[account]?.uid ?? UUID()
+            var task = ScheduledTask(
+                uid: uid,
+                command: Message(
+                    text: canonicalRevisions?[account] ?? "renovar",
+                    kind: provider == .codex ? .codex : .claude,
+                    configDir: account.path
+                ),
+                repetition: .continuous
+            )
+            task.bootstrapWhenInactive =
+                canonicalBootstrap.contains(account)
+            tasksByAccount[account] = task
+
+            let recovery = canonicalRecoveries?[account]
+                ?? canonicalCooldowns[account].map {
+                    .cooldown(notBefore: $0, bootstrapOrigin: true)
+                }
+            return ContinuousScheduleDefinition(
+                task: task,
+                intendedAccount: account,
+                availableAccount: account,
+                recovery: recovery
+            )
+        }
+        await (target ?? engine).synchronize(
+            ContinuousScheduleInput(
+                definitions: definitions,
+                paused: paused
+            )
+        )
+    }
+
     func testArmaNoFimDaJanelaAtiva() async {
         detector.end = now.addingTimeInterval(3600)
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: false)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: false)
         XCTAssertEqual(engine.nextRenewal[conta], now.addingTimeInterval(3600))
         XCTAssertTrue(renewed.isEmpty)
     }
@@ -38,7 +155,7 @@ final class RenewalEngineTests: XCTestCase {
     /// explícita do usuário.
     func testContaSemJanelaNaoFazBootstrapSemOptIn() async {
         detector.end = nil
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [],
             paused: false
@@ -47,7 +164,7 @@ final class RenewalEngineTests: XCTestCase {
         XCTAssertTrue(renewed.isEmpty)
 
         await engine.rearmAll()
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [],
             paused: false
@@ -59,10 +176,10 @@ final class RenewalEngineTests: XCTestCase {
         detector.end = nil
         let notBefore = now.addingTimeInterval(300)
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
-            bootstrapNotBefore: [conta: notBefore],
+            cooldowns: [conta: notBefore],
             paused: false
         )
         XCTAssertTrue(renewed.isEmpty)
@@ -78,7 +195,7 @@ final class RenewalEngineTests: XCTestCase {
     /// permanecer configurada nesta instância.
     func testContaSemJanelaFazBootstrapUmaVezComOptIn() async {
         detector.end = nil
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
             paused: false
@@ -95,10 +212,10 @@ final class RenewalEngineTests: XCTestCase {
             engine.nextRenewal[conta],
             now.addingTimeInterval(SessionDetector.blockDuration)
         )
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
-            bootstrapNotBefore: [
+            cooldowns: [
                 conta: now.addingTimeInterval(SessionDetector.blockDuration)
             ],
             paused: false
@@ -108,7 +225,7 @@ final class RenewalEngineTests: XCTestCase {
 
     func testCooldownEhSubstituidoQuandoTranscriptCriaJanela() async {
         detector.end = nil
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
             paused: false
@@ -126,7 +243,7 @@ final class RenewalEngineTests: XCTestCase {
     func testQuotaIndisponivelNaoFazBootstrapMesmoComOptIn() async {
         detector.stateOverride = .unavailable(reason: "schema changed")
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
             paused: false
@@ -143,14 +260,15 @@ final class RenewalEngineTests: XCTestCase {
     func testNeedsAttentionNaoViraCooldownNemRepeteEmTicks() async {
         detector.end = nil
         var attempts = 0
-        engine.onRenew = { _, _ in
+        driver.dispatch = { _, _ in
             attempts += 1
             return .needsAttention
         }
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
+            revisions: [conta: "v1"],
             paused: false
         )
         XCTAssertEqual(attempts, 1)
@@ -163,9 +281,10 @@ final class RenewalEngineTests: XCTestCase {
         XCTAssertEqual(attempts, 1)
         XCTAssertNil(engine.nextRenewal[conta])
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
+            revisions: [conta: "v2"],
             paused: false
         )
         XCTAssertEqual(attempts, 2)
@@ -180,11 +299,11 @@ final class RenewalEngineTests: XCTestCase {
     func testRevogarOptInCancelaRetryDoBootstrapPendente() async {
         detector.end = nil
         var attempts = 0
-        engine.onRenew = { _, _ in
+        driver.dispatch = { _, _ in
             attempts += 1
             return .retryableFailure
         }
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
             paused: false
@@ -192,7 +311,7 @@ final class RenewalEngineTests: XCTestCase {
         XCTAssertEqual(attempts, 1)
         XCTAssertNotNil(engine.nextRenewal[conta])
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [],
             paused: false
@@ -207,11 +326,11 @@ final class RenewalEngineTests: XCTestCase {
     func testRetryPausaDuranteQuotaIndisponivelERetomaDepois() async {
         detector.end = nil
         var attempts = 0
-        engine.onRenew = { _, _ in
+        driver.dispatch = { _, _ in
             attempts += 1
             return .retryableFailure
         }
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
             paused: false
@@ -239,7 +358,7 @@ final class RenewalEngineTests: XCTestCase {
         var entered = false
         var entryWaiter: CheckedContinuation<Void, Never>?
         var release: CheckedContinuation<Void, Never>?
-        engine.onRenew = { _, _ in
+        driver.dispatch = { _, _ in
             attempts += 1
             entered = true
             entryWaiter?.resume()
@@ -248,8 +367,8 @@ final class RenewalEngineTests: XCTestCase {
             return .retryableFailure
         }
 
-        let initialConfigure = Task { @MainActor in
-            await self.engine.configure(
+        let initialSynchronization = Task { @MainActor in
+            await self.synchronize(
                 accounts: [self.conta],
                 bootstrapAccounts: [self.conta],
                 paused: false
@@ -259,14 +378,14 @@ final class RenewalEngineTests: XCTestCase {
             await withCheckedContinuation { entryWaiter = $0 }
         }
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [],
             paused: false
         )
         release?.resume()
         release = nil
-        await initialConfigure.value
+        await initialSynchronization.value
 
         clock.now = now.addingTimeInterval(120)
         await engine.rearmAll()
@@ -280,7 +399,7 @@ final class RenewalEngineTests: XCTestCase {
         var entered = false
         var entryWaiter: CheckedContinuation<Void, Never>?
         var release: CheckedContinuation<Void, Never>?
-        engine.onRenew = { _, _ in
+        driver.dispatch = { _, _ in
             attempts += 1
             entered = true
             entryWaiter?.resume()
@@ -289,8 +408,8 @@ final class RenewalEngineTests: XCTestCase {
             return .completed
         }
 
-        let initialConfigure = Task { @MainActor in
-            await self.engine.configure(
+        let initialSynchronization = Task { @MainActor in
+            await self.synchronize(
                 accounts: [self.conta],
                 bootstrapAccounts: [self.conta],
                 paused: false
@@ -300,14 +419,14 @@ final class RenewalEngineTests: XCTestCase {
             await withCheckedContinuation { entryWaiter = $0 }
         }
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [],
             paused: false
         )
         release?.resume()
         release = nil
-        await initialConfigure.value
+        await initialSynchronization.value
 
         clock.now = now.addingTimeInterval(SessionDetector.blockDuration + 1)
         await engine.rearmAll()
@@ -321,11 +440,11 @@ final class RenewalEngineTests: XCTestCase {
         var entered = false
         var entryWaiter: CheckedContinuation<Void, Never>?
         var release: CheckedContinuation<Void, Never>?
-        var recoveries: [RenewalRecoveryState?] = []
-        engine.onRecoveryState = { _, recovery in
-            recoveries.append(recovery)
+        var persisted: [(ScheduledTask, RenewalRecoveryState?)] = []
+        driver.persistRecovery = { task, recovery in
+            persisted.append((task, recovery))
         }
-        engine.onRenew = { _, _ in
+        driver.dispatch = { _, _ in
             attempts += 1
             entered = true
             entryWaiter?.resume()
@@ -334,12 +453,12 @@ final class RenewalEngineTests: XCTestCase {
             return .retryableFailure
         }
 
-        let initialConfigure = Task { @MainActor in
-            await self.engine.configure(
+        let initialSynchronization = Task { @MainActor in
+            await self.synchronize(
                 accounts: [self.conta],
                 bootstrapAccounts: [self.conta],
-                recoveryStates: [:],
-                accountRevisions: [self.conta: "v1"],
+                recoveries: [:],
+                revisions: [self.conta: "v1"],
                 paused: false
             )
         }
@@ -347,18 +466,18 @@ final class RenewalEngineTests: XCTestCase {
             await withCheckedContinuation { entryWaiter = $0 }
         }
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
-            recoveryStates: [:],
-            accountRevisions: [conta: "v2"],
+            recoveries: [:],
+            revisions: [conta: "v2"],
             paused: false
         )
         XCTAssertEqual(attempts, 1)
 
         release?.resume()
         release = nil
-        await initialConfigure.value
+        await initialSynchronization.value
 
         XCTAssertEqual(attempts, 1)
         XCTAssertEqual(
@@ -366,7 +485,7 @@ final class RenewalEngineTests: XCTestCase {
             now.addingTimeInterval(SessionDetector.blockDuration)
         )
         XCTAssertEqual(
-            recoveries.compactMap { $0 }.last,
+            persisted.compactMap(\.1).last,
             .cooldown(
                 notBefore: now.addingTimeInterval(
                     SessionDetector.blockDuration
@@ -374,27 +493,35 @@ final class RenewalEngineTests: XCTestCase {
                 bootstrapOrigin: true
             )
         )
+        XCTAssertEqual(
+            persisted.last?.0,
+            tasksByAccount[conta],
+            "a lease stale deve ser associada à task corrente da conta"
+        )
     }
 
     func testReinicioRestauraCooldownSemDuplicarBootstrap() async {
         detector.end = nil
         var persisted: RenewalRecoveryState?
-        engine.onRecoveryState = { _, recovery in
+        driver.persistRecovery = { _, recovery in
             if recovery != nil { persisted = recovery }
         }
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: false)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: false)
         XCTAssertEqual(renewed, [conta])
         let recovery = try! XCTUnwrap(persisted)
 
-        let restarted = RenewalEngine(detector: detector, clock: clock)
-        restarted.onRenew = { [weak self] url, _ in
-            self?.renewed.append(url)
+        let restartedDriver = RenewalTestDriver()
+        restartedDriver.dispatch = { [weak self] task, _ in
+            guard let self else { return .completed }
+            self.renewed.append(self.account(of: task))
             return .completed
         }
-        await restarted.configure(
+        let restarted = makeEngine(driver: restartedDriver)
+        await synchronize(
+            restarted,
             accounts: [conta],
             bootstrapAccounts: [conta],
-            recoveryStates: [conta: recovery],
+            recoveries: [conta: recovery],
             paused: false
         )
 
@@ -408,15 +535,15 @@ final class RenewalEngineTests: XCTestCase {
     func testReinicioNaoDuplicaHandoffAgendadoComOptIn() async {
         detector.end = now.addingTimeInterval(60)
         var persisted: RenewalRecoveryState?
-        engine.onRecoveryState = { _, recovery in
+        driver.persistRecovery = { _, recovery in
             if recovery != nil { persisted = recovery }
         }
         var triggers: [RenewalEngine.Trigger] = []
-        engine.onRenew = { _, trigger in
+        driver.dispatch = { _, trigger in
             triggers.append(trigger)
             return .launched
         }
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
             paused: false
@@ -436,15 +563,17 @@ final class RenewalEngineTests: XCTestCase {
             )
         )
 
-        let restarted = RenewalEngine(detector: detector, clock: clock)
-        restarted.onRenew = { _, trigger in
+        let restartedDriver = RenewalTestDriver()
+        restartedDriver.dispatch = { _, trigger in
             triggers.append(trigger)
             return .launched
         }
-        await restarted.configure(
+        let restarted = makeEngine(driver: restartedDriver)
+        await synchronize(
+            restarted,
             accounts: [conta],
             bootstrapAccounts: [conta],
-            recoveryStates: [conta: recovery],
+            recoveries: [conta: recovery],
             paused: false
         )
 
@@ -458,11 +587,11 @@ final class RenewalEngineTests: XCTestCase {
     func testReinicioPreservaRetryAgendadoMesmoSemOptIn() async {
         detector.end = now.addingTimeInterval(60)
         var persisted: RenewalRecoveryState?
-        engine.onRecoveryState = { _, recovery in
+        driver.persistRecovery = { _, recovery in
             if recovery != nil { persisted = recovery }
         }
-        engine.onRenew = { _, _ in .retryableFailure }
-        await engine.configure(
+        driver.dispatch = { _, _ in .retryableFailure }
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [],
             paused: false
@@ -481,19 +610,17 @@ final class RenewalEngineTests: XCTestCase {
         )
 
         var triggers: [RenewalEngine.Trigger] = []
-        let restarted = RenewalEngine(
-            detector: detector,
-            clock: clock,
-            retryJitter: { _, _ in 1 }
-        )
-        restarted.onRenew = { _, trigger in
+        let restartedDriver = RenewalTestDriver()
+        restartedDriver.dispatch = { _, trigger in
             triggers.append(trigger)
             return .completed
         }
-        await restarted.configure(
+        let restarted = makeEngine(driver: restartedDriver)
+        await synchronize(
+            restarted,
             accounts: [conta],
             bootstrapAccounts: [],
-            recoveryStates: [conta: recovery],
+            recoveries: [conta: recovery],
             paused: false
         )
         XCTAssertEqual(
@@ -510,7 +637,7 @@ final class RenewalEngineTests: XCTestCase {
     /// Catch-up: a janela venceu enquanto o Mac dormia → renova ao acordar.
     func testCatchUpRenovaQuandoJanelaVenceuDormindo() async {
         detector.end = now.addingTimeInterval(3600)
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: false)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: false)
         clock.now = now.addingTimeInterval(2 * 3600)
         detector.end = nil
         await engine.handleWake()
@@ -520,12 +647,12 @@ final class RenewalEngineTests: XCTestCase {
     /// Depois de renovar, re-arma no fim da janela recém-aberta (encadeia).
     func testRenovacaoEncadeiaProximaJanela() async {
         detector.end = now.addingTimeInterval(3600)
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: false)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: false)
         clock.now = now.addingTimeInterval(2 * 3600)
         detector.end = nil
-        engine.onRenew = { [weak self] url, _ in
+        driver.dispatch = { [weak self] task, _ in
             guard let self else { return .completed }
-            self.renewed.append(url)
+            self.renewed.append(self.account(of: task))
             self.detector.end = self.clock.now.addingTimeInterval(5 * 3600) // hi abriu janela nova
             return .completed
         }
@@ -539,14 +666,15 @@ final class RenewalEngineTests: XCTestCase {
     func testFalhaTransitoriaTentaDeNovoSomenteAposBackoff() async {
         detector.end = nil
         var attempts = 0
-        engine.onRenew = { [weak self] url, _ in
+        driver.dispatch = { [weak self] task, _ in
             attempts += 1
             guard attempts > 1 else { return .retryableFailure }
-            self?.renewed.append(url)
-            self?.detector.end = self?.clock.now.addingTimeInterval(5 * 3600)
+            guard let self else { return .completed }
+            self.renewed.append(self.account(of: task))
+            self.detector.end = self.clock.now.addingTimeInterval(5 * 3600)
             return .completed
         }
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: false)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: false)
         XCTAssertEqual(attempts, 1)
         XCTAssertTrue(renewed.isEmpty)
         XCTAssertEqual(engine.nextRenewal[conta], now.addingTimeInterval(60))
@@ -567,12 +695,12 @@ final class RenewalEngineTests: XCTestCase {
     func testFalhasRepetidasUsamBackoffExponencialLimitado() async {
         detector.end = nil
         var attempts = 0
-        engine.onRenew = { _, _ in
+        driver.dispatch = { _, _ in
             attempts += 1
             return .retryableFailure
         }
 
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: false)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: false)
         XCTAssertEqual(engine.nextRenewal[conta], now.addingTimeInterval(60))
 
         clock.now = now.addingTimeInterval(60)
@@ -588,12 +716,12 @@ final class RenewalEngineTests: XCTestCase {
 
     func testBackoffComecaQuandoAFalhaRetorna() async {
         detector.end = nil
-        engine.onRenew = { [weak self] _, _ in
+        driver.dispatch = { [weak self] _, _ in
             self?.clock.now = self?.now.addingTimeInterval(70) ?? Date()
             return .retryableFailure
         }
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [conta],
             paused: false
@@ -609,15 +737,15 @@ final class RenewalEngineTests: XCTestCase {
         detector.end = nil
         let deadline = now.addingTimeInterval(300)
         var triggers: [RenewalEngine.Trigger] = []
-        engine.onRenew = { _, trigger in
+        driver.dispatch = { _, trigger in
             triggers.append(trigger)
             return .launched
         }
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [],
-            recoveryStates: [
+            recoveries: [
                 conta: .cooldown(
                     notBefore: deadline,
                     bootstrapOrigin: false
@@ -637,10 +765,10 @@ final class RenewalEngineTests: XCTestCase {
     func testDetectorRecebeProviderPersistidoSemReinferirConta() async {
         detector.end = nil
 
-        await engine.configure(
+        await synchronize(
             accounts: [conta],
             bootstrapAccounts: [],
-            accountProviders: [conta: .codex],
+            providers: [conta: .codex],
             paused: false
         )
 
@@ -660,10 +788,10 @@ final class RenewalEngineTests: XCTestCase {
         let earlier = now.addingTimeInterval(60)
         let later = now.addingTimeInterval(120)
 
-        await engine.configure(
+        await synchronize(
             accounts: [real, alias],
             bootstrapAccounts: [real, alias],
-            bootstrapNotBefore: [real: earlier, alias: later],
+            cooldowns: [real: earlier, alias: later],
             paused: false
         )
 
@@ -675,7 +803,7 @@ final class RenewalEngineTests: XCTestCase {
 
     func testPausadoNaoArmaNemRenova() async {
         detector.end = now.addingTimeInterval(3600)
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: true)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: true)
         XCTAssertNil(engine.nextRenewal[conta])
         clock.now = now.addingTimeInterval(2 * 3600)
         await engine.handleWake()
@@ -685,7 +813,7 @@ final class RenewalEngineTests: XCTestCase {
     /// Segundo wake logo após a renovação não renova de novo.
     func testWakeConsecutivoNaoRenovaDeNovo() async {
         detector.end = now.addingTimeInterval(60)
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: false)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: false)
         clock.now = now.addingTimeInterval(120)
         detector.end = nil
         await engine.handleWake() // catch-up renova
@@ -695,19 +823,19 @@ final class RenewalEngineTests: XCTestCase {
 
     func testContaRemovidaDoSetDesarma() async {
         detector.end = now.addingTimeInterval(3600)
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: false)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: false)
         XCTAssertNotNil(engine.nextRenewal[conta])
-        await engine.configure(accounts: [], bootstrapAccounts: [], paused: false)
+        await synchronize(accounts: [], bootstrapAccounts: [], paused: false)
         XCTAssertNil(engine.nextRenewal[conta])
     }
 
     func testContaRemovidaEReadicionadaSemJanelaFazNovoBootstrap() async {
         detector.end = nil
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: false)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: false)
         XCTAssertEqual(renewed, [conta])
 
-        await engine.configure(accounts: [], bootstrapAccounts: [], paused: false)
-        await engine.configure(accounts: [conta], bootstrapAccounts: [conta], paused: false)
+        await synchronize(accounts: [], bootstrapAccounts: [], paused: false)
+        await synchronize(accounts: [conta], bootstrapAccounts: [conta], paused: false)
 
         XCTAssertEqual(renewed, [conta, conta])
     }

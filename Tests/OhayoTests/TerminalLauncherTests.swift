@@ -1,6 +1,22 @@
 import XCTest
 @testable import Ohayo
 
+private extension TerminalLauncher {
+    /// Os testes de integração montam o mesmo contrato imutável usado pelo
+    /// FireController sem manter um atalho baseado em `Message` em produção.
+    func launchTestMessage(
+        _ message: Message
+    ) async -> Result<Void, RunnerError> {
+        let prepared = DispatchPreparer(
+            isDirectory: { _ in true }
+        ).prepare(.direct(message, origin: .manual))
+        guard case .success(let dispatch) = prepared else {
+            return .failure(.failed("fixture de dispatch inválida"))
+        }
+        return await launch(dispatch)
+    }
+}
+
 final class TerminalLauncherTests: XCTestCase {
     func testClaudeInterativoNaoUsaPrintEMontaAmbiente() throws {
         let binary = URL(fileURLWithPath: "/tmp/fake claude")
@@ -49,7 +65,7 @@ final class TerminalLauncherTests: XCTestCase {
         let msg = Message(text: "bom dia", kind: .claude,
                           configDir: "/tmp/conta claude", workingDir: "/tmp/proj")
 
-        guard case .success = await launcher.launch(msg) else {
+        guard case .success = await launcher.launchTestMessage(msg) else {
             return XCTFail("launch deveria ter sucesso")
         }
 
@@ -161,7 +177,7 @@ final class TerminalLauncherTests: XCTestCase {
         launcher.appleScriptRunner = { _ in .success(()) }
         let msg = Message(text: "oi", kind: .claude,
                           configDir: conta.path, workingDir: proj.path)
-        guard case .success = await launcher.launch(msg) else { return XCTFail() }
+        guard case .success = await launcher.launchTestMessage(msg) else { return XCTFail() }
 
         let bytesAtualizados = try Data(contentsOf: jsonURL)
         XCTAssertEqual(
@@ -188,7 +204,7 @@ final class TerminalLauncherTests: XCTestCase {
         launcher.defaultWorkspaceOverride = proj
         launcher.appleScriptRunner = { _ in .success(()) }
         let msg = Message(text: "oi", kind: .claude, configDir: conta.path)
-        guard case .success = await launcher.launch(msg) else { return XCTFail() }
+        guard case .success = await launcher.launchTestMessage(msg) else { return XCTFail() }
 
         let json = try JSONSerialization.jsonObject(with: Data(
             contentsOf: conta.appendingPathComponent(".claude.json"))) as! [String: Any]
@@ -243,7 +259,7 @@ final class TerminalLauncherTests: XCTestCase {
         launcher.defaultWorkspaceOverride = proj
         launcher.appleScriptRunner = { _ in .success(()) }
         let msg = Message(text: "oi", kind: .claude, configDir: conta.path)
-        guard case .success = await launcher.launch(msg) else { return XCTFail() }
+        guard case .success = await launcher.launchTestMessage(msg) else { return XCTFail() }
 
         let json = try JSONSerialization.jsonObject(with: Data(contentsOf: jsonURL)) as! [String: Any]
         let entrada = (json["projects"] as! [String: Any])[key] as! [String: Any]
@@ -299,7 +315,7 @@ final class TerminalLauncherTests: XCTestCase {
         launcher.defaultWorkspaceOverride = proj
         launcher.appleScriptRunner = { _ in .success(()) }
         let msg = Message(text: "oi", kind: .claude, configDir: conta.path)
-        guard case .success = await launcher.launch(msg) else { return XCTFail() }
+        guard case .success = await launcher.launchTestMessage(msg) else { return XCTFail() }
 
         // O arquivo permanece byte a byte intacto — nada foi destruído.
         XCTAssertEqual(try Data(contentsOf: jsonURL), bytesCorrompidos)
@@ -342,7 +358,7 @@ final class TerminalLauncherTests: XCTestCase {
         var launcher = TerminalLauncher(claudeBinaryOverride: URL(fileURLWithPath: "/tmp/claude"))
         launcher.appleScriptRunner = { _ in .failure(.failed("Terminal não abriu")) }
         let msg = Message(text: "oi", kind: .claude, configDir: conta.path, workingDir: proj.path)
-        guard case .failure = await launcher.launch(msg) else { return XCTFail() }
+        guard case .failure = await launcher.launchTestMessage(msg) else { return XCTFail() }
 
         XCTAssertEqual(scriptsDoTerminal().subtracting(antes), [],
                        "o script temporário vazou após a falha do AppleScript")
@@ -354,7 +370,7 @@ final class TerminalLauncherTests: XCTestCase {
         var launcher = TerminalLauncher(codexBinaryOverride: URL(fileURLWithPath: "/tmp/codex"))
         launcher.appleScriptRunner = { _ in .success(()) }
         let msg = Message(text: "oi", kind: .codex, configDir: conta.path, workingDir: conta.path)
-        guard case .success = await launcher.launch(msg) else { return XCTFail() }
+        guard case .success = await launcher.launchTestMessage(msg) else { return XCTFail() }
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: conta.appendingPathComponent(".claude.json").path))
     }

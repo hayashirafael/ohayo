@@ -5,19 +5,19 @@ import XCTest
 final class UXAccessibilityLocalizationTests: XCTestCase {
     func testNotificacaoDeSucessoNaoPersisteNoTerminalInterativo() {
         XCTAssertFalse(
-            AgendamentoFormSheet.effectiveNotifyOnSuccess(
+            AgendamentoDraft.effectiveNotifyOnSuccess(
                 true,
                 outputMode: .terminal
             )
         )
         XCTAssertTrue(
-            AgendamentoFormSheet.effectiveNotifyOnSuccess(
+            AgendamentoDraft.effectiveNotifyOnSuccess(
                 true,
                 outputMode: .none
             )
         )
         XCTAssertTrue(
-            AgendamentoFormSheet.effectiveNotifyOnSuccess(
+            AgendamentoDraft.effectiveNotifyOnSuccess(
                 true,
                 outputMode: .response
             )
@@ -35,7 +35,7 @@ final class UXAccessibilityLocalizationTests: XCTestCase {
             )
         )
 
-        let restored = AgendamentoFormSheet.restoredState(for: task)
+        let restored = AgendamentoDraft(editing: task)
 
         XCTAssertEqual(restored.outputMode, .terminal)
         XCTAssertFalse(restored.notifyOnSuccess)

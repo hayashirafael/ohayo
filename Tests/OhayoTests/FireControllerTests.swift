@@ -1,6 +1,23 @@
 import XCTest
 @testable import Ohayo
 
+private extension FireController {
+    /// Mantém os cenários legados legíveis sem reintroduzir um adapter de
+    /// `Message` no módulo de produção: o teste atravessa a fronteira tipada.
+    @discardableResult
+    func fire(
+        message: Message,
+        origin: FireOrigin,
+        taskName: String? = nil
+    ) async -> DispatchOutcome {
+        await fire(.direct(
+            message,
+            origin: origin,
+            taskName: taskName
+        ))
+    }
+}
+
 /// Relógio fake para testes determinísticos (compartilhado com RenewalEngineTests).
 final class FakeClock: Clock {
     var now: Date
@@ -30,9 +47,13 @@ final class MockRunner: CommandRunning {
     var result: Result<String, RunnerError> = .success("")
     var calls = 0
     var lastMessage: Message?
-    func run(_ message: Message) async -> Result<String, RunnerError> {
+    var lastDispatch: PreparedDispatch?
+    func run(
+        _ dispatch: PreparedDispatch
+    ) async -> Result<String, RunnerError> {
         calls += 1
-        lastMessage = message
+        lastDispatch = dispatch
+        lastMessage = dispatch.message
         return result
     }
 }
@@ -58,9 +79,13 @@ final class MockTerminalLauncher: TerminalLaunching {
     var result: Result<Void, RunnerError> = .success(())
     var calls = 0
     var lastMessage: Message?
-    func launch(_ message: Message) async -> Result<Void, RunnerError> {
+    var lastDispatch: PreparedDispatch?
+    func launch(
+        _ dispatch: PreparedDispatch
+    ) async -> Result<Void, RunnerError> {
         calls += 1
-        lastMessage = message
+        lastDispatch = dispatch
+        lastMessage = dispatch.message
         return result
     }
 }
@@ -70,12 +95,42 @@ final class MockAuthenticationChecker: AuthenticationChecking {
     var calls = 0
     var lastProvider: Provider?
     var lastConfigDir: URL?
+    var lastAccount: ProviderAccountContext?
 
-    func status(for provider: Provider, configDir: URL) async -> AuthenticationStatus {
+    func status(
+        for account: ProviderAccountContext
+    ) async -> AuthenticationStatus {
         calls += 1
-        lastProvider = provider
-        lastConfigDir = configDir
+        lastAccount = account
+        lastProvider = account.provider
+        lastConfigDir = account.configDirectory
         return status
+    }
+}
+
+actor SuspendingAuthenticationChecker: AuthenticationChecking {
+    private var gate: CheckedContinuation<Void, Never>?
+    private var entryWaiter: CheckedContinuation<Void, Never>?
+    private var entered = false
+
+    func status(
+        for account: ProviderAccountContext
+    ) async -> AuthenticationStatus {
+        entered = true
+        entryWaiter?.resume()
+        entryWaiter = nil
+        await withCheckedContinuation { gate = $0 }
+        return .authenticated
+    }
+
+    func waitUntilChecking() async {
+        if entered { return }
+        await withCheckedContinuation { entryWaiter = $0 }
+    }
+
+    func resume() {
+        gate?.resume()
+        gate = nil
     }
 }
 
@@ -92,7 +147,9 @@ final class SuspendingRunner: CommandRunning {
     private var entryWaiter: CheckedContinuation<Void, Never>?
     private var entered = false
 
-    func run(_ message: Message) async -> Result<String, RunnerError> {
+    func run(
+        _ dispatch: PreparedDispatch
+    ) async -> Result<String, RunnerError> {
         calls += 1
         entered = true
         entryWaiter?.resume(); entryWaiter = nil
@@ -147,6 +204,95 @@ final class FireControllerTests: XCTestCase {
         XCTAssertEqual(
             state.history.first?.result,
             .failure(message: state.strings.quotaUnavailableEvent)
+        )
+    }
+
+    func testIntentDeAgendaComContaExplicitaAusenteFalhaFechado() async {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohayo-missing-\(UUID().uuidString)")
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "não pode cair no default",
+                kind: .claude,
+                configDir: missing.path,
+                runInTerminal: false
+            )
+        )
+
+        let outcome = await controller.fire(.agenda(task))
+
+        XCTAssertEqual(outcome, .needsAttention)
+        XCTAssertEqual(runner.calls, 0)
+        XCTAssertEqual(authentication.calls, 0)
+        XCTAssertEqual(
+            state.history.first?.result,
+            .failure(message: state.strings.accountFolderMissingEvent)
+        )
+        XCTAssertEqual(state.history.first?.accountPath, missing.path)
+    }
+
+    func testIntentPreparaContaCanonicaUmaVezParaTodosOsAdapters() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohayo-dispatch-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real")
+        let alias = root.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(
+            at: real,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: alias,
+            withDestinationURL: real
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "revise",
+                kind: .codex,
+                configDir: alias.path,
+                runInTerminal: false
+            )
+        )
+        state.tasks = [task]
+
+        let outcome = await controller.fire(.agenda(task))
+
+        XCTAssertEqual(outcome, .completed)
+        XCTAssertEqual(
+            runner.lastDispatch?.account?.configDirectory,
+            real.standardizedFileURL
+        )
+        XCTAssertEqual(
+            authentication.lastAccount?.configDirectory,
+            real.standardizedFileURL
+        )
+        XCTAssertEqual(
+            runner.lastDispatch?.account,
+            authentication.lastAccount
+        )
+    }
+
+    func testHistoricoUsaContaJaPreparadaSemReinferirMensagem() async {
+        let message = Message(
+            text: "revise",
+            kind: .claude,
+            configDir: " \n ",
+            runInTerminal: false
+        )
+
+        let outcome = await controller.fire(
+            .direct(message, origin: .agenda)
+        )
+
+        XCTAssertEqual(outcome, .completed)
+        let preparedAccount = try! XCTUnwrap(
+            runner.lastDispatch?.accountDirectory
+        )
+        XCTAssertEqual(
+            state.history.first?.accountPath,
+            preparedAccount.path
         )
     }
 
@@ -234,6 +380,328 @@ final class FireControllerTests: XCTestCase {
         XCTAssertEqual(resultadoPrimeiro, .completed)
         XCTAssertEqual(resultadoSegundo, .completed)
         XCTAssertEqual(gate.calls, 2, "nenhum disparo concorrente pode ser perdido")
+    }
+
+    func testAgendaEnfileiradaEditadaAntesDoSlotNaoExecutaSnapshotAntigo() async {
+        let gate = SuspendingRunner()
+        let controller = FireController(
+            state: state,
+            detector: detector,
+            runner: gate,
+            notifier: notifier,
+            clock: FakeClock(now: now)
+        )
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "versão antiga",
+                kind: .claude,
+                runInTerminal: false
+            ),
+            repetition: .fixed,
+            times: [9 * 60],
+            weekdays: Set(1...7)
+        )
+        state.tasks = [task]
+
+        let blocker = Task { @MainActor in
+            await controller.fire(.direct(
+                task.resolvedCommand,
+                origin: .manual
+            ))
+        }
+        await gate.waitUntilRunning()
+
+        let queued = Task { @MainActor in
+            await controller.fire(.agenda(task))
+        }
+        await Task.yield()
+        var edited = task
+        edited.command = Message(
+            text: "versão atual",
+            kind: .claude,
+            runInTerminal: false
+        )
+        state.tasks = [edited]
+
+        gate.suspend = false
+        gate.resume()
+
+        let blockerOutcome = await blocker.value
+        let queuedOutcome = await queued.value
+        XCTAssertEqual(blockerOutcome, .completed)
+        XCTAssertEqual(queuedOutcome, .paused)
+        XCTAssertEqual(
+            gate.calls,
+            1,
+            "o payload revogado enquanto aguardava não pode chegar ao runner"
+        )
+    }
+
+    func testAgendaEnfileiradaRemovidaAntesDoSlotNaoExecuta() async {
+        let gate = SuspendingRunner()
+        let controller = FireController(
+            state: state,
+            detector: detector,
+            runner: gate,
+            notifier: notifier,
+            clock: FakeClock(now: now)
+        )
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "removível",
+                kind: .claude,
+                runInTerminal: false
+            ),
+            repetition: .fixed,
+            times: [9 * 60],
+            weekdays: Set(1...7)
+        )
+        state.tasks = [task]
+
+        let blocker = Task { @MainActor in
+            await controller.fire(.direct(
+                task.resolvedCommand,
+                origin: .manual
+            ))
+        }
+        await gate.waitUntilRunning()
+        let queued = Task { @MainActor in
+            await controller.fire(.agenda(task))
+        }
+        await Task.yield()
+        state.tasks = []
+
+        gate.suspend = false
+        gate.resume()
+
+        let blockerOutcome = await blocker.value
+        let queuedOutcome = await queued.value
+        XCTAssertEqual(blockerOutcome, .completed)
+        XCTAssertEqual(queuedOutcome, .paused)
+        XCTAssertEqual(gate.calls, 1)
+    }
+
+    func testAgendaEditadaDuranteAuthNaoExecutaSnapshotAntigo() async {
+        let suspendingAuthentication = SuspendingAuthenticationChecker()
+        controller = FireController(
+            state: state,
+            detector: detector,
+            runner: runner,
+            notifier: notifier,
+            clock: FakeClock(now: now),
+            authenticationChecker: suspendingAuthentication
+        )
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "versão antiga",
+                kind: .claude,
+                runInTerminal: false
+            ),
+            repetition: .fixed,
+            times: [9 * 60],
+            weekdays: Set(1...7)
+        )
+        state.tasks = [task]
+
+        let firing = Task { @MainActor in
+            await controller.fire(.agenda(task))
+        }
+        await suspendingAuthentication.waitUntilChecking()
+        var edited = task
+        edited.command = Message(
+            text: "versão atual",
+            kind: .claude,
+            runInTerminal: false
+        )
+        state.tasks = [edited]
+        await suspendingAuthentication.resume()
+
+        let outcome = await firing.value
+        XCTAssertEqual(outcome, .paused)
+        XCTAssertEqual(
+            runner.calls,
+            0,
+            "o snapshot revogado durante o preflight não pode ser executado"
+        )
+        XCTAssertTrue(state.history.isEmpty)
+    }
+
+    func testAgendaPausadaDuranteAuthNaoEntregaAoTerminalNemRegistra() async {
+        let suspendingAuthentication = SuspendingAuthenticationChecker()
+        let terminal = MockTerminalLauncher()
+        controller = FireController(
+            state: state,
+            detector: detector,
+            runner: runner,
+            terminalLauncher: terminal,
+            notifier: notifier,
+            clock: FakeClock(now: now),
+            authenticationChecker: suspendingAuthentication
+        )
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "não executar após pausa",
+                kind: .claude
+            ),
+            repetition: .fixed,
+            times: [9 * 60],
+            weekdays: Set(1...7)
+        )
+        state.tasks = [task]
+
+        let firing = Task { @MainActor in
+            await controller.fire(.agenda(task))
+        }
+        await suspendingAuthentication.waitUntilChecking()
+        state.setPaused(AppState.defaultConfigDir, true)
+        await suspendingAuthentication.resume()
+
+        let outcome = await firing.value
+        XCTAssertEqual(outcome, .paused)
+        XCTAssertEqual(terminal.calls, 0)
+        XCTAssertEqual(runner.calls, 0)
+        XCTAssertTrue(state.history.isEmpty)
+    }
+
+    func testRenewalEnfileiradaDesabilitadaAntesDoSlotNaoExecuta() async {
+        let gate = SuspendingRunner()
+        let controller = FireController(
+            state: state,
+            detector: detector,
+            runner: gate,
+            notifier: notifier,
+            clock: FakeClock(now: now)
+        )
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "renovação",
+                kind: .claude,
+                runInTerminal: false
+            ),
+            repetition: .continuous
+        )
+        state.tasks = [task]
+
+        let blocker = Task { @MainActor in
+            await controller.fire(.direct(
+                task.resolvedCommand,
+                origin: .manual
+            ))
+        }
+        await gate.waitUntilRunning()
+        let queued = Task { @MainActor in
+            await controller.fire(.renewal(task))
+        }
+        await Task.yield()
+        var disabled = task
+        disabled.enabled = false
+        state.tasks = [disabled]
+
+        gate.suspend = false
+        gate.resume()
+
+        let blockerOutcome = await blocker.value
+        let queuedOutcome = await queued.value
+        XCTAssertEqual(blockerOutcome, .completed)
+        XCTAssertEqual(queuedOutcome, .paused)
+        XCTAssertEqual(gate.calls, 1)
+        XCTAssertNil(detector.lastAccount)
+    }
+
+    func testManualEnfileiradaPreservaAcaoExplicitaAposTaskSerRemovida() async {
+        let gate = SuspendingRunner()
+        let controller = FireController(
+            state: state,
+            detector: detector,
+            runner: gate,
+            notifier: notifier,
+            clock: FakeClock(now: now)
+        )
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "ação explícita",
+                kind: .claude,
+                runInTerminal: false
+            )
+        )
+        state.tasks = [task]
+
+        let blocker = Task { @MainActor in
+            await controller.fire(.direct(
+                task.resolvedCommand,
+                origin: .manual
+            ))
+        }
+        await gate.waitUntilRunning()
+        let queued = Task { @MainActor in
+            await controller.fire(.manual(task))
+        }
+        await Task.yield()
+        state.tasks = []
+
+        gate.suspend = false
+        gate.resume()
+
+        let blockerOutcome = await blocker.value
+        let queuedOutcome = await queued.value
+        XCTAssertEqual(blockerOutcome, .completed)
+        XCTAssertEqual(queuedOutcome, .completed)
+        XCTAssertEqual(gate.calls, 2)
+    }
+
+    func testDisparoEnfileiradoCanceladoNaoExecutaAoLiberarSlot() async {
+        let gate = SuspendingRunner()
+        let controller = FireController(
+            state: state,
+            detector: detector,
+            runner: gate,
+            notifier: notifier,
+            clock: FakeClock(now: now)
+        )
+        let message = Message(
+            text: "não execute",
+            kind: .claude,
+            runInTerminal: false
+        )
+
+        let blocker = Task { @MainActor in
+            await controller.fire(.direct(message, origin: .manual))
+        }
+        await gate.waitUntilRunning()
+
+        let cancelledFinished = expectation(
+            description: "waiter cancelado foi resolvido"
+        )
+        let queued = Task { @MainActor in
+            let outcome = await controller.fire(
+                .direct(message, origin: .manual)
+            )
+            cancelledFinished.fulfill()
+            return outcome
+        }
+        await Task.yield()
+        queued.cancel()
+
+        await fulfillment(of: [cancelledFinished], timeout: 1)
+        let queuedOutcome = await queued.value
+        XCTAssertEqual(queuedOutcome, .paused)
+        XCTAssertEqual(
+            gate.calls,
+            1,
+            "cancelar a espera precisa impedir o efeito externo"
+        )
+
+        gate.suspend = false
+        gate.resume()
+
+        let blockerOutcome = await blocker.value
+        XCTAssertEqual(blockerOutcome, .completed)
     }
 
     func testContasDiferentesPodemExecutarEmParalelo() async {
@@ -587,7 +1055,10 @@ final class FireControllerTests: XCTestCase {
     /// Corpo esperado, montado com os mesmos helpers da implementação
     /// (padrão dos testes que comparam com state.makeEvent).
     private func corpoDeSucesso(para msg: Message) -> String {
-        let conta = msg.kind == .shell ? nil : state.label(for: state.effectiveConfigDir(for: msg))
+        let prepared = try? DispatchPreparer()
+            .prepare(.direct(msg, origin: .agenda))
+            .get()
+        let conta = prepared?.accountDirectory.map(state.label)
         return state.strings.notificationSuccessBody(
             account: conta, time: Fmt.hhmm(now, language: state.language))
     }

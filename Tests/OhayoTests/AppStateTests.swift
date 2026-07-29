@@ -232,26 +232,6 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(msg.resolvedSafeMode)
     }
 
-    func testEffectiveConfigDirUsaOverrideValidoEFallback() throws {
-        let state = AppState(defaults: freshDefaults())
-        // Override para diretório válido → usa o override.
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("conta-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        XCTAssertEqual(
-            state.effectiveConfigDir(for: Message(text: "x", kind: .claude, configDir: dir.path)).standardizedFileURL,
-            dir.standardizedFileURL)
-        // Override inexistente → fallback na conta padrão embutida.
-        XCTAssertEqual(
-            state.effectiveConfigDir(for: Message(text: "x", kind: .claude, configDir: "/tmp/nada-\(UUID().uuidString)")),
-            AppState.defaultConfigDir)
-        // Sem override → conta padrão embutida.
-        XCTAssertEqual(
-            state.effectiveConfigDir(for: Message(text: "x", kind: .claude)),
-            AppState.defaultConfigDir)
-    }
-
     func testHomeInjetadoControlaTodosOsDefaultsDeConta() throws {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("home-\(UUID().uuidString)")
@@ -261,14 +241,6 @@ final class AppStateTests: XCTestCase {
         let claude = home.appendingPathComponent(".claude").standardizedFileURL
         let codex = home.appendingPathComponent(".codex").standardizedFileURL
 
-        XCTAssertEqual(
-            state.effectiveConfigDir(for: Message(text: "x", kind: .claude)),
-            claude
-        )
-        XCTAssertEqual(
-            state.effectiveConfigDir(for: Message(text: "x", kind: .codex)),
-            codex
-        )
         XCTAssertEqual(
             state.accountDir(for: ScheduledTask(
                 uid: UUID(), command: Message(text: "x", kind: .claude)
@@ -500,12 +472,6 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.provider(for: URL(fileURLWithPath: "/nao/existe")), .claude)
     }
 
-    func testEffectiveConfigDirFallbackPorProvider() {
-        let state = AppState(defaults: freshDefaults())
-        let msgCodex = Message(text: "1+1", kind: .codex) // sem configDir
-        XCTAssertEqual(state.effectiveConfigDir(for: msgCodex), AppState.defaultCodexConfigDir)
-    }
-
     /// As contas padrão (~/.claude, ~/.codex) nunca são cadastradas — são
     /// auto-detectadas. `registerAccount` nelas não deve alterar
     /// `registeredAccounts`, mesmo retornando o provider detectado.
@@ -590,31 +556,52 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.activeScheduleCount(for: conta), 2)
     }
 
-    func testConflitoDeContinuoPorConta() throws {
+    func testEditorDetectaConflitoDeContinuoPorConta() throws {
         let state = AppState(defaults: freshDefaults())
         let conta = try makeAccountDir(signature: ".claude.json")
         var cmd = Message(text: "1+1", kind: .claude)
         cmd.configDir = conta.path
         let existente = ScheduledTask(uid: UUID(), command: cmd, repetition: .continuous)
         state.tasks = [existente]
+        let editor = AgendamentoEditor(
+            state: state,
+            isDirectory: { _ in true }
+        )
 
         var candidato = ScheduledTask(uid: UUID(), command: cmd, repetition: .continuous)
-        XCTAssertTrue(state.hasContinuousConflict(candidato))
+        XCTAssertTrue(
+            editor.evaluate(AgendamentoDraft(editing: candidato))
+                .issues.contains(
+                    .continuousConflict(existing: existente.uid)
+                )
+        )
         // Editar o próprio agendamento não conflita consigo mesmo.
         candidato.uid = existente.uid
-        XCTAssertFalse(state.hasContinuousConflict(candidato))
+        XCTAssertFalse(
+            editor.evaluate(AgendamentoDraft(editing: candidato))
+                .issues.contains {
+                    if case .continuousConflict = $0 { return true }
+                    return false
+                }
+        )
         // Repetição fixa nunca conflita.
         candidato.uid = UUID()
         candidato.repetition = .fixed
-        XCTAssertFalse(state.hasContinuousConflict(candidato))
+        XCTAssertTrue(
+            editor.evaluate(AgendamentoDraft(editing: candidato))
+                .issues.isEmpty
+        )
         // O contrato é "no máximo um contínuo habilitado"; deve ser possível
         // salvar um duplicado desligado para depois corrigir/remover.
         candidato.repetition = .continuous
         candidato.enabled = false
-        XCTAssertFalse(state.hasContinuousConflict(candidato))
+        XCTAssertTrue(
+            editor.evaluate(AgendamentoDraft(editing: candidato))
+                .issues.isEmpty
+        )
     }
 
-    func testSetTaskEnabledRecusaSegundoContinuoNaMesmaConta() throws {
+    func testEditorRecusaHabilitarSegundoContinuoNaMesmaConta() throws {
         let state = AppState(defaults: freshDefaults())
         let conta = try makeAccountDir(signature: ".claude.json")
         var cmd = Message(text: "1+1", kind: .claude)
@@ -624,17 +611,38 @@ final class AppStateTests: XCTestCase {
         desabilitado.enabled = false
         let fixo = ScheduledTask(uid: UUID(), command: cmd, times: [480], weekdays: Set(1...7))
         state.tasks = [habilitado, desabilitado, fixo]
+        let editor = AgendamentoEditor(state: state)
 
         // Habilitar um 2º contínuo na mesma conta é recusado; o task fica off.
-        XCTAssertFalse(state.setTaskEnabled(desabilitado, true))
+        XCTAssertEqual(
+            editor.apply(
+                .setEnabled(id: desabilitado.uid, enabled: true)
+            ),
+            .failure(.invalid([
+                .continuousConflict(existing: habilitado.uid),
+            ]))
+        )
         XCTAssertFalse(state.tasks.first { $0.uid == desabilitado.uid }!.enabled)
         // Habilitar um fixo na mesma conta é permitido.
-        XCTAssertTrue(state.setTaskEnabled(fixo, true))
+        XCTAssertEqual(
+            editor.apply(.setEnabled(id: fixo.uid, enabled: true)),
+            .success(.enabled(fixo.uid, true))
+        )
         // Desabilitar qualquer um é sempre permitido.
-        XCTAssertTrue(state.setTaskEnabled(habilitado, false))
+        XCTAssertEqual(
+            editor.apply(
+                .setEnabled(id: habilitado.uid, enabled: false)
+            ),
+            .success(.enabled(habilitado.uid, false))
+        )
         XCTAssertFalse(state.tasks.first { $0.uid == habilitado.uid }!.enabled)
         // Com o 1º já off, o 2º contínuo pode ligar.
-        XCTAssertTrue(state.setTaskEnabled(desabilitado, true))
+        XCTAssertEqual(
+            editor.apply(
+                .setEnabled(id: desabilitado.uid, enabled: true)
+            ),
+            .success(.enabled(desabilitado.uid, true))
+        )
     }
 
     func testRecordMissingFolderContinuousGravaUmaVezPorAgendamento() throws {
@@ -796,6 +804,53 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(state.allScheduledAccountsPaused)
     }
 
+    func testAllScheduledAccountsPausedNaoIgnoraContaComPastaAusente() throws {
+        let state = AppState(defaults: freshDefaults())
+        let available = try makeAccountDir()
+        defer { try? FileManager.default.removeItem(at: available) }
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohayo-missing-\(UUID().uuidString)")
+        let availableTask = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "available",
+                kind: .claude,
+                configDir: available.path
+            )
+        )
+        let missingTask = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "missing",
+                kind: .claude,
+                configDir: missing.path
+            )
+        )
+        state.tasks = [availableTask, missingTask]
+        state.setPaused(available, true)
+
+        XCTAssertFalse(state.allScheduledAccountsPaused)
+    }
+
+    func testIdentidadeVisualDoHorarioPreservaContaComPastaAusente() {
+        let state = AppState(defaults: freshDefaults())
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohayo-missing-\(UUID().uuidString)")
+        let task = ScheduledTask(
+            uid: UUID(),
+            command: Message(
+                text: "status",
+                kind: .claude,
+                configDir: missing.path
+            )
+        )
+
+        XCTAssertEqual(
+            HorariosView.accountIdentity(for: task, in: state),
+            missing.standardizedFileURL
+        )
+    }
+
     // MARK: - Filtro de conta (deep-link do painel)
 
     func testMatchesFilterPorAccountPath() {
@@ -879,7 +934,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(recarregado.resolvedBootstrapWhenInactive)
     }
 
-    func testCooldownDeBootstrapPersisteEntreInstancias() {
+    func testCooldownTipadoPersisteEntreInstancias() {
         let defaults = freshDefaults()
         let state = AppState(defaults: defaults)
         var task = ScheduledTask(
@@ -891,18 +946,66 @@ final class AppStateTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 1_783_000_000)
         state.tasks = [task]
 
-        XCTAssertTrue(state.shouldBootstrap(task, now: now))
-        state.recordBootstrapAttempt(task, at: now)
-        XCTAssertFalse(state.shouldBootstrap(task, now: now))
+        let recovery = RenewalRecoveryState.cooldown(
+            notBefore: now.addingTimeInterval(
+                SessionDetector.blockDuration
+            ),
+            bootstrapOrigin: true
+        )
+        state.setRenewalRecoveryState(recovery, for: task)
+        XCTAssertEqual(state.renewalRecoveryState(for: task), recovery)
 
         let reloaded = AppState(defaults: defaults)
-        XCTAssertFalse(reloaded.shouldBootstrap(task, now: now))
-        XCTAssertTrue(
-            reloaded.shouldBootstrap(
-                task,
-                now: now.addingTimeInterval(AppState.bootstrapCooldown)
-            )
+        XCTAssertEqual(reloaded.renewalRecoveryState(for: task), recovery)
+    }
+
+    func testEditarRevisaoPreservaSomenteLeaseDeCooldown() {
+        let defaults = freshDefaults()
+        let state = AppState(defaults: defaults)
+        var cooldownTask = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .continuous
         )
+        var retryTask = cooldownTask
+        retryTask.uid = UUID()
+        var attentionTask = cooldownTask
+        attentionTask.uid = UUID()
+        cooldownTask.bootstrapWhenInactive = true
+        retryTask.bootstrapWhenInactive = true
+        attentionTask.bootstrapWhenInactive = true
+        state.tasks = [cooldownTask, retryTask, attentionTask]
+        let deadline = Date().addingTimeInterval(300)
+        let cooldown = RenewalRecoveryState.cooldown(
+            notBefore: deadline,
+            bootstrapOrigin: true
+        )
+        state.setRenewalRecoveryState(cooldown, for: cooldownTask)
+        state.setRenewalRecoveryState(
+            .retry(
+                notBefore: deadline,
+                attempt: 2,
+                bootstrapOrigin: true
+            ),
+            for: retryTask
+        )
+        state.setRenewalRecoveryState(
+            .needsAttention(bootstrapOrigin: true),
+            for: attentionTask
+        )
+
+        cooldownTask.command?.text = "editada-cooldown"
+        retryTask.command?.text = "editada-retry"
+        attentionTask.command?.text = "editada-attention"
+        state.tasks = [cooldownTask, retryTask, attentionTask]
+
+        let reloaded = AppState(defaults: defaults)
+        XCTAssertEqual(
+            reloaded.renewalRecoveryState(for: cooldownTask),
+            cooldown
+        )
+        XCTAssertNil(reloaded.renewalRecoveryState(for: retryTask))
+        XCTAssertNil(reloaded.renewalRecoveryState(for: attentionTask))
     }
 
     func testRecoveryTipadoPersisteRetryENeedsAttention() {
@@ -1166,11 +1269,19 @@ final class AppStateTests: XCTestCase {
         )
         task.bootstrapWhenInactive = true
         let now = Date(timeIntervalSince1970: 1_783_000_000)
-        state.recordBootstrapAttempt(task, at: now)
+        state.setRenewalRecoveryState(
+            .cooldown(
+                notBefore: now.addingTimeInterval(
+                    SessionDetector.blockDuration
+                ),
+                bootstrapOrigin: true
+            ),
+            for: task
+        )
 
         task.command = AppState.defaultCodexMessage
 
-        XCTAssertTrue(state.shouldBootstrap(task, now: now))
+        XCTAssertNil(state.renewalRecoveryState(for: task))
     }
 
     func testRevogarEReativarOptInLimpaCooldownAnterior() {
@@ -1183,15 +1294,23 @@ final class AppStateTests: XCTestCase {
         task.bootstrapWhenInactive = true
         let now = Date(timeIntervalSince1970: 1_783_000_000)
         state.tasks = [task]
-        state.recordBootstrapAttempt(task, at: now)
-        XCTAssertFalse(state.shouldBootstrap(task, now: now))
+        state.setRenewalRecoveryState(
+            .cooldown(
+                notBefore: now.addingTimeInterval(
+                    SessionDetector.blockDuration
+                ),
+                bootstrapOrigin: true
+            ),
+            for: task
+        )
+        XCTAssertNotNil(state.renewalRecoveryState(for: task))
 
         task.bootstrapWhenInactive = false
         state.tasks = [task]
         task.bootstrapWhenInactive = true
         state.tasks = [task]
 
-        XCTAssertTrue(state.shouldBootstrap(task, now: now))
+        XCTAssertNil(state.renewalRecoveryState(for: task))
     }
 
     func testContaRealESymlinkCompartilhamIdentidadeDeConflito() throws {
@@ -1232,7 +1351,13 @@ final class AppStateTests: XCTestCase {
             state.accountDir(for: existing),
             state.accountDir(for: candidate)
         )
-        XCTAssertTrue(state.hasContinuousConflict(candidate))
+        XCTAssertTrue(
+            AgendamentoEditor(state: state)
+                .evaluate(AgendamentoDraft(editing: candidate))
+                .issues.contains(
+                    .continuousConflict(existing: existing.uid)
+                )
+        )
     }
 
     func testContaOfflineAindaParticipaDeConflitoFiltroEContagem() {
@@ -1262,7 +1387,16 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertNil(state.accountDir(for: existing))
         XCTAssertEqual(state.intendedAccountDir(for: existing), missing)
-        XCTAssertTrue(state.hasContinuousConflict(candidate))
+        XCTAssertTrue(
+            AgendamentoEditor(
+                state: state,
+                isDirectory: { _ in false }
+            )
+            .evaluate(AgendamentoDraft(editing: candidate))
+            .issues.contains(
+                .continuousConflict(existing: existing.uid)
+            )
+        )
         XCTAssertTrue(state.taskMatchesFilter(existing))
         XCTAssertEqual(state.activeScheduleCount(for: missing), 1)
     }
@@ -1406,15 +1540,20 @@ final class AppStateTests: XCTestCase {
         // versão futura em caso de downgrade). A normalização ocorre na borda
         // de identidade e no formulário.
         XCTAssertEqual(migrated.resolvedCommand.configDir, alias.path)
-        XCTAssertFalse(state.shouldBootstrap(migrated, now: attemptedAt))
+        XCTAssertEqual(
+            state.renewalRecoveryState(for: migrated),
+            .cooldown(
+                notBefore: attemptedAt.addingTimeInterval(
+                    SessionDetector.blockDuration
+                ),
+                bootstrapOrigin: true
+            )
+        )
 
-        let restored = AgendamentoFormSheet.restoredState(for: migrated)
+        let restored = AgendamentoDraft(editing: migrated)
         XCTAssertEqual(restored.account, real.path)
         XCTAssertEqual(
-            AgendamentoFormSheet.effectiveAccountPath(
-                selection: restored.account,
-                accounts: [real]
-            ),
+            restored.normalizedTask().resolvedCommand.configDir,
             real.path
         )
 

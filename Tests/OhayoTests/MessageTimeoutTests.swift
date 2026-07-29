@@ -80,15 +80,15 @@ final class MessageTimeoutTests: XCTestCase {
         )
         let task = ScheduledTask(uid: UUID(), command: command)
 
-        let restored = AgendamentoFormSheet.restoredState(for: task)
+        let restored = AgendamentoDraft(editing: task)
 
         XCTAssertEqual(restored.timeoutSeconds, 1_800)
     }
 
     func testControleDeTimeoutSoApareceQuandoOhayoMonitoraOBatch() {
-        XCTAssertTrue(AgendamentoFormSheet.showsTimeout(for: .none))
-        XCTAssertTrue(AgendamentoFormSheet.showsTimeout(for: .response))
-        XCTAssertFalse(AgendamentoFormSheet.showsTimeout(for: .terminal))
+        XCTAssertTrue(AgendamentoDraft.showsTimeout(for: .none))
+        XCTAssertTrue(AgendamentoDraft.showsTimeout(for: .response))
+        XCTAssertFalse(AgendamentoDraft.showsTimeout(for: .terminal))
     }
 
     func testTimeoutFazRoundtripCodable() throws {

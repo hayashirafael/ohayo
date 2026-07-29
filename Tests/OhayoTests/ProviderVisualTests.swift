@@ -13,12 +13,11 @@ final class ProviderVisualTests: XCTestCase {
     }
 
     func testNovoAgendamentoComecaSemComando() {
-        XCTAssertEqual(AgendamentoFormSheet.initialCommandText, "")
+        XCTAssertEqual(AgendamentoDraft(editing: nil).text, "")
     }
 
     func testNovoAgendamentoClaudeOuCodexComecaNoTerminal() {
-        XCTAssertEqual(AgendamentoFormSheet.initialOutputMode, .terminal)
-        let restored = AgendamentoFormSheet.restoredState(for: nil)
+        let restored = AgendamentoDraft(editing: nil)
         XCTAssertEqual(restored.outputMode, .terminal)
         XCTAssertFalse(restored.bootstrapWhenInactive)
     }
@@ -32,33 +31,37 @@ final class ProviderVisualTests: XCTestCase {
 
         XCTAssertFalse(task.resolvedBootstrapWhenInactive)
         XCTAssertFalse(
-            AgendamentoFormSheet.restoredState(for: task).bootstrapWhenInactive
+            AgendamentoDraft(editing: task).bootstrapWhenInactive
         )
     }
 
     func testModoDeSaidaNormalizaMensagensPersistidas() {
         XCTAssertEqual(
-            AgendamentoFormSheet.outputMode(for: Message(text: "x", kind: .claude)),
+            AgendamentoDraft.outputMode(
+                for: Message(text: "x", kind: .claude)
+            ),
             .terminal)
         XCTAssertEqual(
-            AgendamentoFormSheet.outputMode(for: Message(
+            AgendamentoDraft.outputMode(for: Message(
                 text: "x", kind: .claude, showResponse: true, runInTerminal: false)),
             .response)
         XCTAssertEqual(
-            AgendamentoFormSheet.outputMode(for: Message(
+            AgendamentoDraft.outputMode(for: Message(
                 text: "x", kind: .claude, runInTerminal: false)),
             .none)
         XCTAssertEqual(
-            AgendamentoFormSheet.outputMode(for: Message(
+            AgendamentoDraft.outputMode(for: Message(
                 text: "x", kind: .claude, showResponse: true, runInTerminal: true)),
             .terminal)
         XCTAssertEqual(
-            AgendamentoFormSheet.outputMode(for: Message(text: "echo x", kind: .shell)),
+            AgendamentoDraft.outputMode(
+                for: Message(text: "echo x", kind: .shell)
+            ),
             .none)
     }
 
     func testRestoredStateParaNovoAgendamentoUsaDefaults() {
-        let restored = AgendamentoFormSheet.restoredState(for: nil)
+        let restored = AgendamentoDraft(editing: nil)
         XCTAssertEqual(restored.kind, .claude)
         XCTAssertNil(restored.skill)
         XCTAssertNil(restored.account)
@@ -76,7 +79,7 @@ final class ProviderVisualTests: XCTestCase {
                 codexReasoning: .high
             )
         )
-        let restored = AgendamentoFormSheet.restoredState(for: task)
+        let restored = AgendamentoDraft(editing: task)
 
         XCTAssertTrue(AgendamentoFormSheet.hasAdvancedConfiguration(restored))
     }
@@ -89,9 +92,11 @@ final class ProviderVisualTests: XCTestCase {
             uid: UUID(),
             command: Message(text: "x", kind: .codex, codexReasoning: .low))
 
-        XCTAssertNil(AgendamentoFormSheet.restoredState(for: accountDefault).codexReasoning)
+        XCTAssertNil(
+            AgendamentoDraft(editing: accountDefault).codexReasoning
+        )
         XCTAssertEqual(
-            AgendamentoFormSheet.restoredState(for: explicitLow).codexReasoning,
+            AgendamentoDraft(editing: explicitLow).codexReasoning,
             .low
         )
     }
@@ -130,7 +135,7 @@ final class ProviderVisualTests: XCTestCase {
         let command = Message(text: "revisa", kind: .codex, configDir: "/contas/codex-1",
                                skill: "minha-skill")
         let task = ScheduledTask(uid: UUID(), command: command)
-        let restored = AgendamentoFormSheet.restoredState(for: task)
+        let restored = AgendamentoDraft(editing: task)
         XCTAssertEqual(restored.kind, .codex)
         XCTAssertEqual(restored.skill, "minha-skill")
         XCTAssertEqual(restored.account, "/contas/codex-1")
@@ -144,7 +149,7 @@ final class ProviderVisualTests: XCTestCase {
     func testRestoredStateMantemSkillMesmoQueDesconhecidaParaCatalogoAtual() {
         let command = Message(text: "revisa", kind: .claude, skill: "skill-renomeada")
         let task = ScheduledTask(uid: UUID(), command: command)
-        let restored = AgendamentoFormSheet.restoredState(for: task)
+        let restored = AgendamentoDraft(editing: task)
         XCTAssertEqual(restored.skill, "skill-renomeada")
     }
 

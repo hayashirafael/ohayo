@@ -28,7 +28,7 @@ struct OhayoApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuPanel(state: env.state, env: env)
+            MenuPanel(state: env.state)
         } label: {
             MenuBarLabel(state: env.state)
                 .background {
