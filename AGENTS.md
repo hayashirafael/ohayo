@@ -142,7 +142,8 @@ codesign --verify --deep --strict --verbose=2 build/Ohayo.app
 
 ## Repository hygiene
 
-`CONTEXT.md`, `docs/`, and `.superpowers/` are ignored local working notes.
-Do not add them to commits. Never expose credentials, provider auth files,
-account transcripts, prompts, or personal account paths in tests, logs,
-documentation, screenshots, commits, or pull requests.
+`CONTEXT.md`, `.superpowers/`, and `docs/` outside `docs/agents/` are ignored
+local working notes. Do not add them to commits. `docs/agents/` is tracked
+configuration for the engineering skills. Never expose credentials, provider
+auth files, account transcripts, prompts, or personal account paths in tests,
+logs, documentation, screenshots, commits, or pull requests.

@@ -4,6 +4,8 @@ build/
 *.xcodeproj
 .swiftpm/
 .worktrees/
-docs/
+docs/*
+!docs/agents/
+!docs/agents/**
 CONTEXT.md
 .superpowers/

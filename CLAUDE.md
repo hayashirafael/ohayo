@@ -12,6 +12,20 @@ shell commands and can chain supported 5-hour usage windows per account.
 Provider schedules are account-centered; shell schedules have no provider
 account.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues for `hayashirafael/ohayo`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the canonical triage labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with `CONTEXT.md` and ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Domain vocabulary
 
 - **Account** — a native or custom Claude/Codex account resolved by
@@ -267,9 +281,10 @@ log stream --predicate 'subsystem == "io.github.hayashirafael.Ohayo"' --level de
 
 ## Repo hygiene
 
-`CONTEXT.md`, `docs/` and `.superpowers/` are local working notes — never
-commit them (they are gitignored). Do not add session trailers or AI-process
-footers to commits or PRs in this repo.
+`CONTEXT.md`, `.superpowers/` and `docs/` outside `docs/agents/` are local
+working notes — never commit them (they are gitignored). `docs/agents/` is
+tracked configuration for the engineering skills. Do not add session trailers
+or AI-process footers to commits or PRs in this repo.
 
 ## Release flow
 
