@@ -16,11 +16,13 @@ case "$CHANNEL" in
         APP_NAME="Ohayo"
         BUNDLE_IDENTIFIER="io.github.hayashirafael.Ohayo"
         EXECUTABLE_NAME="Ohayo"
+        ICON_MASTER="assets/AppIcon.png"
         ;;
     development)
         APP_NAME="Ohayo Dev"
         BUNDLE_IDENTIFIER="io.github.hayashirafael.Ohayo.dev"
         EXECUTABLE_NAME="Ohayo Dev"
+        ICON_MASTER="assets/AppIcon-Dev.png"
         ;;
     *)
         echo "erro: canal inválido: $CHANNEL" >&2
@@ -170,10 +172,9 @@ for required_path in \
 done
 lipo "$SPARKLE_VERSION_DIR/Sparkle" -verify_arch arm64 x86_64
 
-# Ícone: a partir de um único master 1024x1024 (assets/AppIcon.png), gera todos
-# os tamanhos que o macOS exige e compila o .icns. macOS não arredonda sozinho —
-# o formato squircle e a margem vão desenhados no próprio PNG.
-ICON_MASTER="assets/AppIcon.png"
+# Ícone: a partir do master 1024x1024 do canal, gera todos os tamanhos que o
+# macOS exige e compila o .icns. macOS não arredonda sozinho — o formato
+# squircle e a margem vão desenhados no próprio PNG.
 if [[ -f "$ICON_MASTER" ]]; then
     ICONSET="$(mktemp -d)/AppIcon.iconset"
     mkdir -p "$ICONSET"

@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import XCTest
 
 final class UpdateConfigurationTests: XCTestCase {
@@ -50,6 +51,46 @@ final class UpdateConfigurationTests: XCTestCase {
         XCTAssertTrue(portuguese.contains("pastas que você escolher"))
     }
 
+    func testBuildDevUsaIconeDedicadoEValido() throws {
+        let root = repositoryRootDirectory()
+        let script = try String(
+            contentsOf: root.appendingPathComponent(
+                "scripts/make-app.sh"
+            ),
+            encoding: .utf8
+        )
+        XCTAssertTrue(script.contains(
+            #"ICON_MASTER="assets/AppIcon.png""#
+        ))
+        XCTAssertTrue(script.contains(
+            #"ICON_MASTER="assets/AppIcon-Dev.png""#
+        ))
+
+        let productionIcon = root.appendingPathComponent(
+            "assets/AppIcon.png"
+        )
+        let developmentIcon = root.appendingPathComponent(
+            "assets/AppIcon-Dev.png"
+        )
+        XCTAssertNotEqual(
+            try Data(contentsOf: productionIcon),
+            try Data(contentsOf: developmentIcon)
+        )
+
+        let source = try XCTUnwrap(
+            CGImageSourceCreateWithURL(
+                developmentIcon as CFURL,
+                nil
+            )
+        )
+        let image = try XCTUnwrap(
+            CGImageSourceCreateImageAtIndex(source, 0, nil)
+        )
+        XCTAssertEqual(image.width, 1_024)
+        XCTAssertEqual(image.height, 1_024)
+        XCTAssertNotEqual(image.alphaInfo, .none)
+    }
+
     private func repositoryInfoPlist() throws -> [String: Any] {
         let url = repositoryScriptsDirectory()
             .appendingPathComponent("Info.plist")
@@ -63,10 +104,14 @@ final class UpdateConfigurationTests: XCTestCase {
     }
 
     private func repositoryScriptsDirectory() -> URL {
+        repositoryRootDirectory()
+            .appendingPathComponent("scripts", isDirectory: true)
+    }
+
+    private func repositoryRootDirectory() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("scripts", isDirectory: true)
     }
 }

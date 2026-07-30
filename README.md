@@ -126,8 +126,9 @@ open "build/Ohayo Dev.app" --args --ui-testing
 `Ohayo Dev.app` uses the `io.github.hayashirafael.Ohayo.dev` bundle identifier,
 `~/Library/Application Support/Ohayo Dev`, a separate single-instance lock and
 preferences domain. In-app updates and Launch at Login are unavailable in this
-channel. Development starts without copying accounts, schedules, history or
-preferences from the production app.
+channel. Its blue icon carries a visible **DEV** badge so it remains distinct
+from production in the Dock and app switcher. Development starts without
+copying accounts, schedules, history or preferences from the production app.
 
 ### Updates
 

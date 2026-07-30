@@ -95,6 +95,8 @@ This is a single-context repository with `CONTEXT.md` and ADRs under `docs/adr/`
 - `AppRuntimeProfile.swift` — resolve produção somente para o bundle ID
   oficial. `Ohayo Dev.app` e `swift run Ohayo` compartilham identidade de
   desenvolvimento, preferências, Application Support e políticas isoladas.
+  O empacotamento Dev usa `assets/AppIcon-Dev.png`, com paleta azul e selo
+  visível, sem alterar o ícone de produção.
 - `AppState.swift` — central observable state and UserDefaults persistence for
   unified agendamentos. Pause is per account: `pausedAccounts: Set<String>`
   (canonical paths, persisted). Typed renewal recovery

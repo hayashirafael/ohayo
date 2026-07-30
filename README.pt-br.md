@@ -128,8 +128,10 @@ open "build/Ohayo Dev.app" --args --ui-testing
 O `Ohayo Dev.app` usa o bundle ID `io.github.hayashirafael.Ohayo.dev`,
 `~/Library/Application Support/Ohayo Dev`, um lock de instância e um domínio de
 preferências separados. Atualizações no app e Iniciar com o Mac ficam
-indisponíveis nesse canal. O desenvolvimento começa sem copiar contas,
-agendamentos, histórico ou preferências do app de produção.
+indisponíveis nesse canal. Seu ícone azul tem um selo **DEV** visível para
+continuar diferente da produção no Dock e no seletor de apps. O desenvolvimento
+começa sem copiar contas, agendamentos, histórico ou preferências do app de
+produção.
 
 ### Atualizações
 
