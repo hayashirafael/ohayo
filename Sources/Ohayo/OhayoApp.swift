@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct OhayoApp: App {
     @StateObject private var env = AppEnvironment()
+    @StateObject private var updater = AppUpdater()
 
     /// Vive pelo processo inteiro: o kernel solta o flock quando ele morre.
     private static let instanceLock = SingleInstanceLock()
@@ -47,7 +48,7 @@ struct OhayoApp: App {
         .windowResizability(.contentMinSize)
 
         Settings {
-            GeneralTab(state: env.state)
+            GeneralTab(state: env.state, updater: updater)
                 .frame(width: 620)
                 .frame(minHeight: 430)
         }

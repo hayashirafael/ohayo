@@ -8,10 +8,18 @@
     <key>CFBundleExecutable</key><string>Ohayo</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.1.1</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>1.2.0</string>
+    <key>CFBundleVersion</key><string>2</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
+    <key>SUFeedURL</key>
+    <string>https://github.com/hayashirafael/ohayo/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>0LRc6DDOU7pqJl1h6gFKZpz7W4NpM31R8RK6U9ftZwU=</string>
+    <key>SUEnableAutomaticChecks</key><true/>
+    <key>SUAutomaticallyUpdate</key><false/>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
+    <key>SURequireSignedFeed</key><true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>Ohayo uses Terminal to open the Claude Code and Codex sessions you start.</string>
     <key>NSHighResolutionCapable</key><true/>

@@ -3,8 +3,8 @@
 **English** | [Português](README.pt-br.md)
 
 macOS menu bar app that keeps your Claude plan's 5-hour usage windows always
-open — per account, automatically. Swift + SwiftUI (`MenuBarExtra`), no
-external dependencies.
+open — per account, automatically. Swift + SwiftUI (`MenuBarExtra`), with
+Sparkle for secure in-app updates.
 
 ## Why
 
@@ -42,6 +42,8 @@ Code transcripts, making no network calls of its own.
   login status for every configured Claude/Codex account; it never runs a
   prompt or consumes quota
 - **Language** — English by default, with a Portuguese option in Settings
+- **In-app updates** — checks the signed GitHub release feed automatically;
+  install and relaunch without downloading a DMG manually
 - Per-account **Pause/Resume**, in **Accounts**, and optional **Launch at
   Login**
 
@@ -72,7 +74,9 @@ brew install --cask ohayo
 ```
 
 Ohayo is a clean install. Remove any previous installation completely before
-installing this version.
+installing the first Sparkle-enabled version. After that bootstrap install,
+future releases can be installed from **Settings… → About → Check for
+Updates…**.
 
 ### DMG
 
@@ -80,13 +84,13 @@ Download `Ohayo-<version>.dmg` from the
 [latest release](../../releases/latest) and drag **Ohayo** onto
 **Applications**.
 
-> The currently published v1.1.1 artifact supports Apple Silicon only. It is
-> also ad-hoc signed and not notarized, so Gatekeeper may require **System
-> Settings → Privacy & Security → Open Anyway**. The release workflow in this
-> revision is fail-closed: future public artifacts require Developer ID
-> signing, hardened runtime, notarization and stapling before they can be
-> published, and are built universal for Apple Silicon and Intel. Builds made
-> locally without a signing identity remain ad-hoc.
+> The currently published v1.1.1 artifact supports Apple Silicon only. The
+> free tester distribution starting with v1.2.0 is universal for Apple Silicon
+> and Intel, ad-hoc signed, and not notarized. On first launch, Gatekeeper may
+> require right-clicking the app and selecting **Open**, or using **System
+> Settings → Privacy & Security → Open Anyway**. Once all Apple signing
+> credentials are configured, the same release workflow automatically switches
+> to Developer ID signing, hardened runtime, notarization, and stapling.
 
 ### From source
 
@@ -98,6 +102,19 @@ swift test            # test suite
 ./scripts/make-dmg.sh # build/Ohayo-<version>.dmg (needs `brew install create-dmg`)
 open build/Ohayo.app
 ```
+
+### Updates
+
+Version 1.2.0 is the updater bootstrap. Existing installations without Sparkle
+need this one final manual Homebrew/DMG upgrade. From 1.2.0 onward, Ohayo checks
+the signed release feed daily and offers **Install and Relaunch** in-app. Use
+**Settings… → About → Check for Updates…** to check immediately.
+
+Even in the free tester mode, release archives and the feed are
+cryptographically validated by Sparkle's separate EdDSA key. Apple Developer
+ID and notarization are intentionally deferred; until then, the first install
+does not have Apple's Gatekeeper trust. The GitHub release workflow publishes
+the final DMG and its signed `appcast.xml` together.
 
 ## Usage
 
@@ -149,7 +166,7 @@ General preferences live in the native **Settings…** window instead of the
 operational sidebar: Launch at Login, time remaining in the menu bar,
 sensitive notification details (off by default), how many upcoming runs the
 menu panel shows (1–5), Language (English or Portuguese), system access, and
-the app version.
+the app version and **Check for Updates…**.
 
 ### First-run permissions
 

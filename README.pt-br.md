@@ -4,7 +4,7 @@
 
 App de menu bar para macOS que mantém as janelas de uso de 5h do seu plano
 Claude sempre abertas — por conta, automaticamente. Swift + SwiftUI
-(`MenuBarExtra`), sem dependências externas.
+(`MenuBarExtra`), com Sparkle para atualizações seguras dentro do app.
 
 ## Por quê
 
@@ -45,6 +45,8 @@ rede própria.
   instalação das CLIs e do login de cada conta Claude/Codex configurada; nunca
   executa prompt nem consome cota
 - **Idioma** — inglês por padrão, com opção para português nos Ajustes
+- **Atualizações dentro do app** — consulta automaticamente o feed assinado
+  das releases no GitHub; instala e reinicia sem download manual do DMG
 - **Pausar/Retomar** por conta, em **Contas**, e **Iniciar com o Mac**
   opcional
 
@@ -75,20 +77,23 @@ brew install --cask ohayo
 ```
 
 O Ohayo deve ser instalado de forma limpa. Remova completamente qualquer
-instalação anterior antes de instalar esta versão.
+instalação anterior antes de instalar a primeira versão com Sparkle. Depois
+dessa instalação-bootstrap, as próximas releases podem ser instaladas em
+**Ajustes… → Sobre → Buscar atualizações…**.
 
 ### DMG
 
 Baixe o `Ohayo-<versão>.dmg` da [última release](../../releases/latest) e
 arraste o **Ohayo** para **Applications**.
 
-> O artefato v1.1.1 publicado atualmente funciona somente em Apple Silicon.
-> Ele também é assinado ad-hoc e não notarizado; o Gatekeeper pode exigir
-> **Ajustes do Sistema → Privacidade e Segurança → Abrir Assim Mesmo**. O
-> workflow desta revisão falha fechado: releases públicas futuras exigem
-> Developer ID, hardened runtime, notarização e stapling antes da publicação
-> e são geradas como universais para Apple Silicon e Intel. Builds locais sem
-> identidade continuam assinados ad-hoc.
+> O artefato v1.1.1 publicado atualmente funciona somente em Apple Silicon. A
+> distribuição gratuita para testers a partir da v1.2.0 é universal para Apple
+> Silicon e Intel, assinada ad-hoc e não notarizada. Na primeira abertura, o
+> Gatekeeper pode exigir clicar com o botão direito no app e escolher **Abrir**
+> ou usar **Ajustes do Sistema → Privacidade e Segurança → Abrir Assim Mesmo**.
+> Quando todas as credenciais Apple forem configuradas, o mesmo workflow passa
+> automaticamente a usar Developer ID, hardened runtime, notarização e
+> stapling.
 
 ### A partir do código
 
@@ -100,6 +105,20 @@ swift test            # suíte de testes
 ./scripts/make-dmg.sh # build/Ohayo-<versão>.dmg (requer `brew install create-dmg`)
 open build/Ohayo.app
 ```
+
+### Atualizações
+
+A versão 1.2.0 é o bootstrap do atualizador. Instalações anteriores, ainda sem
+Sparkle, precisam desta última atualização manual via Homebrew/DMG. A partir da
+1.2.0, o Ohayo consulta diariamente o feed assinado e oferece **Instalar e
+reiniciar** dentro do app. Use **Ajustes… → Sobre → Buscar atualizações…** para
+verificar imediatamente.
+
+Mesmo no modo gratuito para testers, os arquivos de atualização e o feed são
+validados criptograficamente por uma chave EdDSA separada do Sparkle. Developer
+ID e notarização da Apple ficam intencionalmente para depois; até lá, a primeira
+instalação não tem a confiança do Gatekeeper. O workflow de release publica
+juntos o DMG final e seu `appcast.xml` assinado.
 
 ## Uso
 
@@ -151,7 +170,8 @@ três seções:
 As preferências gerais ficam na janela nativa **Ajustes…**, separadas da
 sidebar operacional: Iniciar com o Mac, tempo restante na barra de menus,
 detalhes sensíveis nas notificações (desligados por padrão), quantos próximos
-Disparos o painel mostra (1–5), Idioma, acesso ao sistema e a versão do app.
+Disparos o painel mostra (1–5), Idioma, acesso ao sistema, a versão do app e
+**Buscar atualizações…**.
 
 ### Permissões na primeira abertura
 

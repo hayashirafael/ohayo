@@ -22,47 +22,17 @@ jobs:
           OHAYO_NOTARY_APPLE_ID: ${{ secrets.OHAYO_NOTARY_APPLE_ID }}
           OHAYO_NOTARY_TEAM_ID: ${{ secrets.OHAYO_NOTARY_TEAM_ID }}
           OHAYO_NOTARY_APP_SPECIFIC_PASSWORD: ${{ secrets.OHAYO_NOTARY_APP_SPECIFIC_PASSWORD }}
-        run: |
-          set -euo pipefail
-
-          signing_names=(
-            OHAYO_CODESIGN_IDENTITY
-            OHAYO_CODESIGN_CERTIFICATE_BASE64
-            OHAYO_CODESIGN_CERTIFICATE_PASSWORD
-          )
-          notary_names=(
-            OHAYO_NOTARY_APPLE_ID
-            OHAYO_NOTARY_TEAM_ID
-            OHAYO_NOTARY_APP_SPECIFIC_PASSWORD
-          )
-
-          signing_count=0
-          for variable_name in "${signing_names[@]}"; do
-            [[ -z "${!variable_name}" ]] || signing_count=$((signing_count + 1))
-          done
-          notary_count=0
-          for variable_name in "${notary_names[@]}"; do
-            [[ -z "${!variable_name}" ]] || notary_count=$((notary_count + 1))
-          done
-
-          if (( signing_count > 0 && signing_count < ${#signing_names[@]} )); then
-            echo "::error::Configuração parcial. Defina juntos: ${signing_names[*]}" >&2
-            exit 1
-          fi
-          if (( notary_count > 0 && notary_count < ${#notary_names[@]} )); then
-            echo "::error::Configuração parcial. Defina juntos: ${notary_names[*]}" >&2
-            exit 1
-          fi
-          if (( signing_count == 0 || notary_count == 0 )); then
-            echo "::error::Release pública exige Developer ID e notarização. Configure todos os secrets OHAYO_CODESIGN_* e OHAYO_NOTARY_*." >&2
-            exit 1
-          fi
-
-          echo "signing_enabled=true" >> "$GITHUB_OUTPUT"
-          echo "notarization_enabled=true" >> "$GITHUB_OUTPUT"
+          OHAYO_SPARKLE_PRIVATE_KEY: ${{ secrets.OHAYO_SPARKLE_PRIVATE_KEY }}
+        run: ./scripts/configure-release-mode.sh
       - name: Validate packaging scripts and workflows
         run: |
-          bash -n scripts/make-app.sh scripts/make-dmg.sh
+          bash -n \
+            scripts/configure-release-mode.sh \
+            scripts/make-app.sh \
+            scripts/make-dmg.sh \
+            scripts/test-release-mode.sh \
+            scripts/update-cask.sh
+          ./scripts/test-release-mode.sh
           ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' \
             .github/workflows/ci.yml .github/workflows/release.yml
           plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' scripts/Info.plist)"
@@ -124,8 +94,15 @@ jobs:
           }
 
           codesign --verify --deep --strict --verbose=2 build/Ohayo.app
+          codesign --verify --deep --strict --verbose=2 \
+            build/Ohayo.app/Contents/Frameworks/Sparkle.framework
           lipo build/Ohayo.app/Contents/MacOS/Ohayo \
             -verify_arch arm64 x86_64
+          lipo \
+            build/Ohayo.app/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle \
+            -verify_arch arm64 x86_64
+          otool -l build/Ohayo.app/Contents/MacOS/Ohayo \
+            | grep -q '@executable_path/../Frameworks'
           minos_count="$(vtool -show-build build/Ohayo.app/Contents/MacOS/Ohayo \
             | awk '$1 == "minos" && $2 == "13.0" { count++ } END { print count + 0 }')"
           [[ "$minos_count" -eq 2 ]] || {
@@ -141,6 +118,9 @@ jobs:
           if [[ "${{ steps.credentials.outputs.signing_enabled }}" == "true" ]]; then
             codesign --display --verbose=4 build/Ohayo.app 2>&1 | grep -q 'runtime'
             codesign --verify --strict --verbose=2 "${dmg_files[0]}"
+          else
+            codesign --display --verbose=4 build/Ohayo.app 2>&1 \
+              | grep -q 'Signature=adhoc'
           fi
       - name: Configure notarization credentials
         if: steps.credentials.outputs.notarization_enabled == 'true'
@@ -228,6 +208,32 @@ jobs:
           smoke_pid=""
           hdiutil detach "$mount_point"
           mounted=false
+      - name: Generate and verify signed Sparkle appcast
+        env:
+          OHAYO_SPARKLE_PRIVATE_KEY: ${{ secrets.OHAYO_SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#v}"
+          appcast_dir="$RUNNER_TEMP/ohayo-appcast"
+          mkdir -p "$appcast_dir"
+          cp "build/Ohayo-${version}.dmg" "$appcast_dir/"
+
+          printf '%s' "$OHAYO_SPARKLE_PRIVATE_KEY" \
+            | .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
+                --ed-key-file - \
+                --download-url-prefix \
+                "https://github.com/hayashirafael/ohayo/releases/download/${GITHUB_REF_NAME}/" \
+                --link "https://github.com/hayashirafael/ohayo" \
+                --maximum-versions 1 \
+                --maximum-deltas 0 \
+                -o "$GITHUB_WORKSPACE/build/appcast.xml" \
+                "$appcast_dir"
+
+          xmllint --noout build/appcast.xml
+          grep -q 'sparkle:edSignature=' build/appcast.xml
+          grep -q '<!-- sparkle-signatures:' build/appcast.xml
+          grep -q "Ohayo-${version}.dmg" build/appcast.xml
       - name: Remove signing material
         if: always() && steps.credentials.outputs.signing_enabled == 'true'
         run: |
@@ -239,7 +245,9 @@ jobs:
             "$RUNNER_TEMP/ohayo-notarization-result.json"
       - uses: softprops/action-gh-release@v2
         with:
-          files: build/Ohayo-*.dmg
+          files: |
+            build/Ohayo-*.dmg
+            build/appcast.xml
       - uses: actions/checkout@v4
         with:
           repository: hayashirafael/homebrew-tap

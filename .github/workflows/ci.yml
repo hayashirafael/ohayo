@@ -16,7 +16,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate packaging scripts and workflows
         run: |
-          bash -n scripts/make-app.sh scripts/make-dmg.sh
+          bash -n \
+            scripts/configure-release-mode.sh \
+            scripts/make-app.sh \
+            scripts/make-dmg.sh \
+            scripts/test-release-mode.sh \
+            scripts/update-cask.sh
+          ./scripts/test-release-mode.sh
           ruby -e 'require "yaml"; ARGV.each { |path| YAML.parse_file(path) }' \
             .github/workflows/ci.yml .github/workflows/release.yml
       - run: swift test
@@ -30,8 +36,14 @@ jobs:
         run: |
           test -x build/Ohayo.app/Contents/MacOS/Ohayo
           test -d build/Ohayo.app/Contents/Resources/Ohayo_Ohayo.bundle
+          test -d build/Ohayo.app/Contents/Frameworks/Sparkle.framework
           lipo build/Ohayo.app/Contents/MacOS/Ohayo \
             -verify_arch arm64 x86_64
+          lipo \
+            build/Ohayo.app/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle \
+            -verify_arch arm64 x86_64
+          otool -l build/Ohayo.app/Contents/MacOS/Ohayo \
+            | grep -q '@executable_path/../Frameworks'
           minos_count="$(vtool -show-build build/Ohayo.app/Contents/MacOS/Ohayo \
             | awk '$1 == "minos" && $2 == "13.0" { count++ } END { print count + 0 }')"
           [[ "$minos_count" -eq 2 ]] || {
@@ -40,6 +52,8 @@ jobs:
           }
           plutil -lint scripts/Ohayo.entitlements
           codesign --verify --deep --strict --verbose=2 build/Ohayo.app
+          codesign --verify --deep --strict --verbose=2 \
+            build/Ohayo.app/Contents/Frameworks/Sparkle.framework
           codesign --display --entitlements - build/Ohayo.app 2>&1 \
             | grep -q 'com.apple.security.automation.apple-events'
           plutil -lint build/Ohayo.app/Contents/Info.plist

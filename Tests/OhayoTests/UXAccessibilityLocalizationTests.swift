@@ -91,4 +91,15 @@ final class UXAccessibilityLocalizationTests: XCTestCase {
             )
         )
     }
+
+    func testAtualizacaoTemAcaoLocalizadaNosDoisIdiomas() {
+        XCTAssertEqual(
+            L10n(language: .english).checkForUpdates,
+            "Check for Updates…"
+        )
+        XCTAssertEqual(
+            L10n(language: .portuguese).checkForUpdates,
+            "Buscar atualizações…"
+        )
+    }
 }

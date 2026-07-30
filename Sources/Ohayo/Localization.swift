@@ -82,6 +82,9 @@ struct L10n {
         text(en: "Upcoming runs in panel", pt: "Próximos disparos no painel")
     }
     var version: String { text(en: "Version", pt: "Versão") }
+    var checkForUpdates: String {
+        text(en: "Check for Updates…", pt: "Buscar atualizações…")
+    }
     var permissionGuideTitle: String { text(en: "Set Up Ohayo", pt: "Configurar o Ohayo") }
     var permissionGuideIntro: String {
         text(en: "Choose which system integrations you want to configure now.",

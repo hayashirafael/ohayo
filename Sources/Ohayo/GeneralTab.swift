@@ -2,6 +2,7 @@ import SwiftUI
 
 struct GeneralTab: View {
     @ObservedObject var state: AppState
+    @ObservedObject var updater: AppUpdater
     @Environment(\.openWindow) private var openWindow
     private let loginItem: LoginItemManaging = SystemLoginItemManager()
     private var strings: L10n { state.strings }
@@ -63,6 +64,15 @@ struct GeneralTab: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
+                Button {
+                    updater.checkForUpdates()
+                } label: {
+                    Label(
+                        strings.checkForUpdates,
+                        systemImage: "arrow.triangle.2.circlepath"
+                    )
+                }
+                .disabled(!updater.canCheckForUpdates)
             }
         }
         .formStyle(.grouped)

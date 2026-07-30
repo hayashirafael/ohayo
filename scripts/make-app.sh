@@ -26,6 +26,7 @@ if [[ "$UNIVERSAL_BUILD" == 0 ]]; then
     BUILD_DIR="$(swift build -c release --show-bin-path)"
     BINARY_SOURCE="$BUILD_DIR/Ohayo"
     RESOURCE_BUNDLE="$BUILD_DIR/Ohayo_Ohayo.bundle"
+    SPARKLE_FRAMEWORK_SOURCE="$BUILD_DIR/Sparkle.framework"
 else
     BUILD_ARCHS=(arm64 x86_64)
     BUILD_TRIPLES=(arm64-apple-macosx13.0 x86_64-apple-macosx13.0)
@@ -48,10 +49,21 @@ else
     done
 
     RESOURCE_BUNDLE="${ARCH_BUILD_DIRS[0]}/Ohayo_Ohayo.bundle"
+    SPARKLE_FRAMEWORK_SOURCE="${ARCH_BUILD_DIRS[0]}/Sparkle.framework"
     for arch_build_dir in "${ARCH_BUILD_DIRS[@]:1}"; do
         diff -qr "$RESOURCE_BUNDLE" \
             "$arch_build_dir/Ohayo_Ohayo.bundle" >/dev/null || {
             echo "erro: resource bundles diferem entre arquiteturas" >&2
+            exit 1
+        }
+        cmp -s "$SPARKLE_FRAMEWORK_SOURCE/Versions/B/Sparkle" \
+            "$arch_build_dir/Sparkle.framework/Versions/B/Sparkle" || {
+            echo "erro: binário do Sparkle difere entre builds de arquitetura" >&2
+            exit 1
+        }
+        cmp -s "$SPARKLE_FRAMEWORK_SOURCE/Versions/B/Resources/Info.plist" \
+            "$arch_build_dir/Sparkle.framework/Versions/B/Resources/Info.plist" || {
+            echo "erro: metadados do Sparkle diferem entre builds de arquitetura" >&2
             exit 1
         }
     done
@@ -68,6 +80,7 @@ APP="build/Ohayo.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/Frameworks"
 cp "$BINARY_SOURCE" "$APP/Contents/MacOS/Ohayo"
 cp scripts/Info.plist "$APP/Contents/Info.plist"
 for localization in scripts/*.lproj; do
@@ -86,6 +99,30 @@ cp -R "$RESOURCE_BUNDLE" "$APP/Contents/Resources/"
     echo "erro: $RESOURCE_BUNDLE ausente — resource bundle não foi empacotado" >&2
     exit 1
 }
+
+# Sparkle é um framework dinâmico. `swift build` o coloca junto do executável,
+# mas um `.app` montado manualmente precisa incorporá-lo em Contents/Frameworks.
+# `ditto` preserva os symlinks e permissões internos exigidos pelo framework.
+[[ -d "$SPARKLE_FRAMEWORK_SOURCE" ]] || {
+    echo "erro: Sparkle.framework ausente: $SPARKLE_FRAMEWORK_SOURCE" >&2
+    exit 1
+}
+ditto "$SPARKLE_FRAMEWORK_SOURCE" \
+    "$APP/Contents/Frameworks/Sparkle.framework"
+SPARKLE_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
+SPARKLE_VERSION_DIR="$SPARKLE_FRAMEWORK/Versions/B"
+for required_path in \
+    "$SPARKLE_VERSION_DIR/Sparkle" \
+    "$SPARKLE_VERSION_DIR/Autoupdate" \
+    "$SPARKLE_VERSION_DIR/Updater.app" \
+    "$SPARKLE_VERSION_DIR/XPCServices/Installer.xpc" \
+    "$SPARKLE_VERSION_DIR/XPCServices/Downloader.xpc"; do
+    [[ -e "$required_path" ]] || {
+        echo "erro: helper obrigatório do Sparkle ausente: $required_path" >&2
+        exit 1
+    }
+done
+lipo "$SPARKLE_VERSION_DIR/Sparkle" -verify_arch arm64 x86_64
 
 # Ícone: a partir de um único master 1024x1024 (assets/AppIcon.png), gera todos
 # os tamanhos que o macOS exige e compila o .icns. macOS não arredonda sozinho —
@@ -120,18 +157,37 @@ CODESIGN_ARGS=(
     --sign "$CODESIGN_IDENTITY"
     --entitlements "$ENTITLEMENTS"
 )
+NESTED_CODESIGN_ARGS=(
+    --force
+    --sign "$CODESIGN_IDENTITY"
+)
 
 if [[ "$CODESIGN_IDENTITY" != "-" ]]; then
     # A Apple exige hardened runtime e secure timestamp para notarização.
     CODESIGN_ARGS+=(--options runtime --timestamp)
+    NESTED_CODESIGN_ARGS+=(--options runtime --timestamp)
     if [[ -n "$CODESIGN_KEYCHAIN" ]]; then
         [[ -f "$CODESIGN_KEYCHAIN" ]] || {
             echo "erro: keychain de assinatura não encontrado: $CODESIGN_KEYCHAIN" >&2
             exit 1
         }
         CODESIGN_ARGS+=(--keychain "$CODESIGN_KEYCHAIN")
+        NESTED_CODESIGN_ARGS+=(--keychain "$CODESIGN_KEYCHAIN")
     fi
 fi
+
+# Em um pipeline customizado fora do Archive/Export do Xcode, os helpers
+# internos do Sparkle precisam ser assinados de dentro para fora com a mesma
+# identidade do app. Downloader preserva seus próprios entitlements.
+codesign "${NESTED_CODESIGN_ARGS[@]}" \
+    "$SPARKLE_VERSION_DIR/XPCServices/Installer.xpc"
+codesign "${NESTED_CODESIGN_ARGS[@]}" \
+    --preserve-metadata=entitlements \
+    "$SPARKLE_VERSION_DIR/XPCServices/Downloader.xpc"
+codesign "${NESTED_CODESIGN_ARGS[@]}" "$SPARKLE_VERSION_DIR/Autoupdate"
+codesign "${NESTED_CODESIGN_ARGS[@]}" "$SPARKLE_VERSION_DIR/Updater.app"
+codesign "${NESTED_CODESIGN_ARGS[@]}" "$SPARKLE_FRAMEWORK"
+codesign --verify --deep --strict "$SPARKLE_FRAMEWORK"
 
 codesign "${CODESIGN_ARGS[@]}" "$APP"
 codesign --verify --deep --strict "$APP"
