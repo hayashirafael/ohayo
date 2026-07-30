@@ -32,6 +32,13 @@ final class PrivacyLocalizationTests: XCTestCase {
             "Open History in Ohayo to see the run details."
         )
         XCTAssertEqual(strings.timeout, "Timeout")
+        XCTAssertEqual(strings.limitDuration, "Limit duration")
+        XCTAssertEqual(strings.durationInMinutes, "Duration in minutes")
+        XCTAssertEqual(strings.minutesUnit, "minutes")
+        XCTAssertEqual(
+            strings.saveNeedsPositiveTimeout,
+            "Enter a duration greater than zero"
+        )
         XCTAssertEqual(
             strings.bootstrapWhenInactive,
             "Try to start when no active window is detected"
@@ -85,6 +92,13 @@ final class PrivacyLocalizationTests: XCTestCase {
             "Abra o Histórico no Ohayo para ver os detalhes da execução."
         )
         XCTAssertEqual(strings.timeout, "Tempo limite")
+        XCTAssertEqual(strings.limitDuration, "Limitar duração")
+        XCTAssertEqual(strings.durationInMinutes, "Duração em minutos")
+        XCTAssertEqual(strings.minutesUnit, "minutos")
+        XCTAssertEqual(
+            strings.saveNeedsPositiveTimeout,
+            "Informe uma duração maior que zero"
+        )
         XCTAssertEqual(
             strings.bootstrapWhenInactive,
             "Tentar iniciar quando não houver janela ativa"

@@ -399,6 +399,39 @@ final class CommandRunnerTests: XCTestCase {
                           "o timeout persistido da mensagem não foi aplicado")
     }
 
+    func testBatchSemTimeoutConfiguradoNaoImpoeLimiteAutomatico() async {
+        let runtime = CapturingCommandRuntime()
+        let runner = CommandRunner(
+            binaryOverride: URL(fileURLWithPath: "/tmp/claude-fake"),
+            processRuntime: runtime
+        )
+        var message = Message(text: "comando demorado", kind: .claude)
+        message.runInTerminal = false
+
+        let result = await runner.run(dispatch(message))
+
+        XCTAssertEqual(result, .success(""))
+        XCTAssertNil(runtime.requests.last?.timeout)
+    }
+
+    func testBatchComTimeoutConfiguradoRepassaDuracaoPersonalizada() async {
+        let runtime = CapturingCommandRuntime()
+        let runner = CommandRunner(
+            shellOverride: URL(fileURLWithPath: "/tmp/zsh-fake"),
+            processRuntime: runtime
+        )
+        let message = Message(
+            text: "comando demorado",
+            kind: .shell,
+            timeoutSeconds: 420
+        )
+
+        let result = await runner.run(dispatch(message))
+
+        XCTAssertEqual(result, .success(""))
+        XCTAssertEqual(runtime.requests.last?.timeout, 420)
+    }
+
     func testRunnerBatchAplicaTimeoutMesmoSeMensagemMarcaTerminal() async {
         let runner = CommandRunner(binaryOverride: makeScript("sleep 2; exit 0"))
         let message = Message(

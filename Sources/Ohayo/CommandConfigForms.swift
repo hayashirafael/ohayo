@@ -195,41 +195,33 @@ struct ConfigRowLabel: View {
     }
 }
 
-/// Timeout do processo que o Ohayo acompanha. O valor opcional mantém o
-/// payload enxuto: nil representa o default seguro de cada tipo de comando.
-struct TimeoutPicker: View {
-    @Binding var timeoutSeconds: Int?
-    let kind: Message.Kind
+/// Limite opcional do processo que o Ohayo acompanha. A duração fica vazia
+/// enquanto o recurso está desligado e aceita qualquer inteiro positivo.
+struct TimeoutEditor: View {
+    @Binding var isEnabled: Bool
+    @Binding var minutes: Int?
     let strings: L10n
 
-    private var selection: Binding<Int> {
-        Binding(
-            get: {
-                timeoutSeconds ?? Message.defaultTimeoutSeconds(for: kind)
-            },
-            set: {
-                timeoutSeconds = Message.normalizedTimeoutSeconds($0, for: kind)
-            }
-        )
-    }
-
     var body: some View {
-        HStack(spacing: 8) {
-            Text(strings.timeout)
-                .foregroundStyle(.secondary)
-            Picker("", selection: selection) {
-                ForEach(Message.timeoutPresets, id: \.self) { seconds in
-                    Text(Self.label(for: seconds)).tag(seconds)
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(strings.limitDuration, isOn: $isEnabled)
+                .toggleStyle(.checkbox)
+            if isEnabled {
+                HStack(spacing: 6) {
+                    TextField(
+                        strings.durationInMinutes,
+                        value: $minutes,
+                        format: .number
+                    )
+                    .frame(width: 88)
+                    .accessibilityLabel(strings.durationInMinutes)
+                    Text(strings.minutesUnit)
+                        .foregroundStyle(.secondary)
                 }
+                .padding(.leading, 20)
             }
-            .labelsHidden()
-            .accessibilityLabel(strings.timeout)
         }
-    }
-
-    static func label(for seconds: Int) -> String {
-        let minutes = seconds / 60
-        return minutes == 1 ? "1 min" : "\(minutes) min"
+        .font(.caption)
     }
 }
 

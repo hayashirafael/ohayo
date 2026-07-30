@@ -174,19 +174,6 @@ extension Message {
     static let defaultModel: Model = .haiku
     static let defaultEffort: Effort = .low
     static let defaultSafeMode = true
-    static let timeoutPresets = [60, 300, 900, 1_800]
-    static let defaultProviderTimeoutSeconds = 900
-    static let defaultShellTimeoutSeconds = 300
-    static func defaultTimeoutSeconds(for kind: Kind) -> Int {
-        kind == .shell
-            ? defaultShellTimeoutSeconds
-            : defaultProviderTimeoutSeconds
-    }
-    /// Defaults não precisam ocupar o payload persistido; sua ausência também
-    /// permite que uma versão futura ajuste o padrão de produção.
-    static func normalizedTimeoutSeconds(_ seconds: Int?, for kind: Kind) -> Int? {
-        seconds == defaultTimeoutSeconds(for: kind) ? nil : seconds
-    }
     var resolvedModel: Model { model ?? Self.defaultModel }
     var resolvedEffort: Effort { effort ?? Self.defaultEffort }
     /// Skill efetiva: nil e string vazia contam como "sem skill".
@@ -242,7 +229,8 @@ extension Message {
     /// não existe timeout aplicável nesse modo.
     var resolvedTimeoutSeconds: Int? {
         guard !resolvedRunInTerminal else { return nil }
-        return timeoutSeconds ?? Self.defaultTimeoutSeconds(for: kind)
+        guard let timeoutSeconds, timeoutSeconds > 0 else { return nil }
+        return timeoutSeconds
     }
 }
 

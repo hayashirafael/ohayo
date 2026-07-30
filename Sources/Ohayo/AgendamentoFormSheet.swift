@@ -255,9 +255,9 @@ struct AgendamentoFormSheet: View {
                 if AgendamentoDraft.showsTimeout(
                     for: draft.outputMode
                 ) {
-                    TimeoutPicker(
-                        timeoutSeconds: $draft.timeoutSeconds,
-                        kind: draft.kind,
+                    TimeoutEditor(
+                        isEnabled: $draft.timeoutEnabled,
+                        minutes: $draft.timeoutMinutes,
                         strings: strings
                     )
                 }
@@ -616,6 +616,8 @@ struct AgendamentoFormSheet: View {
             return strings.saveNeedsTime
         case .missingWeekday:
             return strings.saveNeedsDay
+        case .invalidTimeout:
+            return strings.saveNeedsPositiveTimeout
         case .continuousShell:
             return strings.continuousShellInvalidEvent
         case .continuousConflict:
@@ -747,7 +749,7 @@ struct AgendamentoFormSheet: View {
             || !draft.codexModel.isEmpty
             || draft.codexReasoning != nil
             || draft.codexAccessMode != .fullAccess
-            || draft.timeoutSeconds != nil
+            || draft.timeoutEnabled
             || draft.skill?.isEmpty == false
             || !draft.workingDir.isEmpty
     }

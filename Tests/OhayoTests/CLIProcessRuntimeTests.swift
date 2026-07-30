@@ -161,6 +161,18 @@ final class CLIProcessRuntimeTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 2)
     }
 
+    func testTimeoutAusentePermiteProcessoTerminarSemLimiteAutomatico() async {
+        let runtime = SystemCLIProcessRuntime()
+        let result = await runtime.run(CLIProcessRequest(
+            executable: shell,
+            arguments: ["-c", "sleep 0.15; printf concluido"],
+            timeout: nil
+        ))
+
+        XCTAssertEqual(result.termination, .exited(0))
+        XCTAssertEqual(result.stdout.text, "concluido")
+    }
+
     func testTimeoutSemCancelamentoPreservaGraceParaCleanup() async {
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent(

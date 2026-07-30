@@ -457,6 +457,13 @@ struct L10n {
         )
     }
     var timeout: String { text(en: "Timeout", pt: "Tempo limite") }
+    var limitDuration: String {
+        text(en: "Limit duration", pt: "Limitar duração")
+    }
+    var durationInMinutes: String {
+        text(en: "Duration in minutes", pt: "Duração em minutos")
+    }
+    var minutesUnit: String { text(en: "minutes", pt: "minutos") }
     var runInTerminal: String {
         text(en: "Open in Terminal (interactive)",
              pt: "Abrir no Terminal (interativo)")
@@ -925,6 +932,12 @@ struct L10n {
     }
     var saveNeedsDay: String {
         text(en: "Select at least one day", pt: "Selecione ao menos um dia")
+    }
+    var saveNeedsPositiveTimeout: String {
+        text(
+            en: "Enter a duration greater than zero",
+            pt: "Informe uma duração maior que zero"
+        )
     }
     var scheduleCouldNotSave: String {
         text(

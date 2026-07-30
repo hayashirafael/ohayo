@@ -18,7 +18,7 @@ struct CLIProcessRequest {
     var account: ProviderAccountContext?
     var workingDirectory: URL?
     var standardInput: Data?
-    var timeout: TimeInterval = 10
+    var timeout: TimeInterval? = 10
     var stdout: CLIProcessOutputPolicy = .capture()
     var stderr: CLIProcessOutputPolicy = .capture()
 
@@ -29,7 +29,7 @@ struct CLIProcessRequest {
         account: ProviderAccountContext? = nil,
         workingDirectory: URL? = nil,
         standardInput: Data? = nil,
-        timeout: TimeInterval = 10,
+        timeout: TimeInterval? = 10,
         stdout: CLIProcessOutputPolicy = .capture(),
         stderr: CLIProcessOutputPolicy = .capture()
     ) {
@@ -177,13 +177,19 @@ struct SystemCLIProcessRuntime: CLIProcessRunning {
             }
         }
 
-        let timeoutWork = DispatchWorkItem {
-            race.resolve(.timedOut)
+        let timeoutWork: DispatchWorkItem?
+        if let timeout = request.timeout {
+            let work = DispatchWorkItem {
+                race.resolve(.timedOut)
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(
+                deadline: .now() + max(0, timeout),
+                execute: work
+            )
+            timeoutWork = work
+        } else {
+            timeoutWork = nil
         }
-        DispatchQueue.global(qos: .utility).asyncAfter(
-            deadline: .now() + max(0, request.timeout),
-            execute: timeoutWork
-        )
 
         let event = await withTaskCancellationHandler {
             if Task.isCancelled {
@@ -193,7 +199,7 @@ struct SystemCLIProcessRuntime: CLIProcessRunning {
         } onCancel: {
             race.resolve(.cancelled)
         }
-        timeoutWork.cancel()
+        timeoutWork?.cancel()
 
         let termination: CLIProcessTermination
         switch event {

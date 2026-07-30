@@ -303,11 +303,11 @@ texto simples na pasta selecionada; o padrão é
 `~/Library/Application Support/Ohayo/Responses` (ou o equivalente isolado
 `Ohayo Dev/Responses`). Pastas favoritas ficam salvas localmente para
 reutilização. O Histórico mantém uma prévia limitada, renderiza Markdown e
-oferece um link para o arquivo. O timeout batch é configurável por agendamento:
-o padrão é 15 minutos para Claude/Codex e 5 minutos para shell; sessões
-interativas no Terminal não são supervisionadas por timeout. A captura do
-processo é limitada preservando o início e a cauda, onde normalmente está o
-erro.
+oferece um link para o arquivo. O limite de duração batch é opcional por
+Agendamento e vem desabilitado por padrão. Ative **Limitar duração** e informe
+qualquer número inteiro positivo de minutos; sessões interativas no Terminal
+não são supervisionadas por timeout. A captura do processo é limitada
+preservando o início e a cauda, onde normalmente está o erro.
 Só uma instância do Ohayo roda por vez. Dentro dela, disparos formam uma fila
 FIFO por provider/conta em vez de serem descartados por um lock global; contas
 diferentes podem avançar em paralelo. Falhas transitórias usam backoff

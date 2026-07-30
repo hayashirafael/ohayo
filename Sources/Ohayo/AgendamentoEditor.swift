@@ -27,7 +27,8 @@ struct AgendamentoDraft: Equatable {
     var responseFormat: ResponseFileFormat = .markdown
     var responseDirectory: String
     var favoriteResponseDirectory = false
-    var timeoutSeconds: Int?
+    var timeoutEnabled = false
+    var timeoutMinutes: Int?
     var notifyOnSuccess = false
     var account: String?
     var skill: String?
@@ -77,7 +78,10 @@ struct AgendamentoDraft: Equatable {
         responseFormat = message.resolvedResponseFileFormat
         responseDirectory = message.responseDirectory
             ?? defaultResponseDirectory.standardizedFileURL.path
-        timeoutSeconds = message.timeoutSeconds
+        timeoutEnabled = message.timeoutSeconds != nil
+        timeoutMinutes = message.timeoutSeconds.map {
+            ($0 / 60) + ($0 % 60 == 0 ? 0 : 1)
+        }
         notifyOnSuccess = Self.effectiveNotifyOnSuccess(
             message.resolvedNotifyOnSuccess,
             outputMode: outputMode
@@ -98,6 +102,14 @@ struct AgendamentoDraft: Equatable {
 
     static func showsTimeout(for outputMode: AgendamentoOutputMode) -> Bool {
         outputMode != .terminal
+    }
+
+    static func timeoutSeconds(fromMinutes minutes: Int?) -> Int? {
+        guard let minutes,
+              minutes > 0,
+              minutes <= Int.max / 60
+        else { return nil }
+        return minutes * 60
     }
 
     static func supportsResponseFile(
@@ -183,10 +195,10 @@ struct AgendamentoDraft: Equatable {
             showResponse: outputMode == .response ? true : nil,
             runInTerminal: kind != .shell && outputMode != .terminal
                 ? false : nil,
-            timeoutSeconds: Message.normalizedTimeoutSeconds(
-                timeoutSeconds,
-                for: kind
-            ),
+            timeoutSeconds: Self.showsTimeout(for: outputMode)
+                && timeoutEnabled
+                ? Self.timeoutSeconds(fromMinutes: timeoutMinutes)
+                : nil,
             notifyOnSuccess: Self.effectiveNotifyOnSuccess(
                 notifyOnSuccess,
                 outputMode: outputMode
@@ -227,6 +239,7 @@ enum AgendamentoIssue: Equatable {
     case emptyMessage
     case missingTime
     case missingWeekday
+    case invalidTimeout
     case continuousShell
     case continuousConflict(existing: UUID)
     case accountUnavailable(URL)
@@ -332,6 +345,13 @@ final class AgendamentoEditor {
 
         if normalized.resolvedCommand.text.isEmpty {
             issues.append(.emptyMessage)
+        }
+        if AgendamentoDraft.showsTimeout(for: draft.outputMode),
+           draft.timeoutEnabled,
+           AgendamentoDraft.timeoutSeconds(
+               fromMinutes: draft.timeoutMinutes
+           ) == nil {
+            issues.append(.invalidTimeout)
         }
         switch normalized.repetition {
         case .fixed:

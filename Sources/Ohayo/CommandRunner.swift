@@ -202,13 +202,12 @@ struct CommandRunner: CommandRunning {
         env["PATH"] = [env["PATH"], extraPath].compactMap { $0 }.joined(separator: ":")
 
         // Terminal interativo é lançado por `TerminalLauncher` e não passa por
-        // este executor. Toda chamada direta a `CommandRunner` é batch, mesmo
-        // se receber uma mensagem marcada como Terminal; nesse estado
-        // inconsistente, usa o timeout persistido ou o default do provider.
-        let messageTimeout = message.resolvedTimeoutSeconds
-            ?? message.timeoutSeconds
-            ?? Message.defaultTimeoutSeconds(for: message.kind)
-        let effectiveTimeout = timeoutOverride ?? TimeInterval(messageTimeout)
+        // este executor. Toda chamada direta a `CommandRunner` é batch; um
+        // limite só existe quando foi configurado explicitamente.
+        let messageTimeout = message.timeoutSeconds.flatMap {
+            $0 > 0 ? TimeInterval($0) : nil
+        }
+        let effectiveTimeout = timeoutOverride ?? messageTimeout
         let processResult = await processRuntime.run(
             CLIProcessRequest(
                 executable: executable,

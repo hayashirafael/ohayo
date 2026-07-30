@@ -71,9 +71,9 @@ This is a single-context repository with `CONTEXT.md` and ADRs under `docs/adr/`
   (default `~/Library/Application Support/Ohayo/Responses`, isolated as
   `Ohayo Dev/Responses` in the development profile).
   Claude/Codex default to an interactive Terminal hand-off; `runInTerminal:
-  false` is batch. Batch timeout is configurable (`timeoutSeconds`), defaulting
-  to 900s for providers and 300s for shell; Terminal is unsupervised and has no
-  timeout.
+  false` is batch. A batch duration limit is optional (`timeoutSeconds`) and
+  disabled by default; the schedule form accepts any positive whole number of
+  minutes. Terminal is unsupervised and has no timeout.
   A Message can carry an optional skill (`skill: String?`), detected by
   `SkillCatalog` from account/user/repository scopes (plus Claude plugins and
   enabled Codex plugins) and prefixed at dispatch via `resolvedPromptText`
