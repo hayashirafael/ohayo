@@ -5,6 +5,16 @@ import Foundation
 enum Provider: String, Codable, CaseIterable {
     case claude, codex
 
+    /// Duração do contrato de Janela de uso atualmente suportado pelo
+    /// provedor. A propriedade vive no eixo de Provider para que detecção e
+    /// recovery não dependam de uma constante global se os contratos
+    /// divergirem no futuro.
+    var usageWindowDuration: TimeInterval {
+        switch self {
+        case .claude, .codex: return 5 * 3600
+        }
+    }
+
     /// Infere o provider pelo CONTEÚDO da pasta (o nome é livre — `~/.claude2`,
     /// `~/claudio`, qualquer coisa). Precedência determinística: `.claude.json`
     /// → claude; senão `auth.json` → codex; senão `projects/` → claude; senão

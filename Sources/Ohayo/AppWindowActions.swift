@@ -3,6 +3,12 @@ import AppKit
 /// Coordena a transição do painel transitório da barra para uma janela normal.
 @MainActor
 enum AppWindowActions {
+    static func closeMenuBarPanel() {
+        NSApp.windows.first {
+            $0.className.contains("MenuBarExtraWindow")
+        }?.close()
+    }
+
     static func presentWindow(
         closePanel: @escaping @MainActor () -> Void,
         openWindow: @escaping @MainActor () -> Void

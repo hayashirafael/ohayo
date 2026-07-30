@@ -34,6 +34,17 @@ final class SessionDetectorTests: XCTestCase {
         XCTAssertEqual(end, msg.addingTimeInterval(5 * 3600))
     }
 
+    func testAlgoritmoAceitaDuracaoEspecificaDoProvider() {
+        let msg = hoursAgo(1)
+        let duration: TimeInterval = 3 * 3600
+        let end = SessionDetector.activeBlockEnd(
+            timestamps: [msg],
+            now: now,
+            duration: duration
+        )
+        XCTAssertEqual(end, msg.addingTimeInterval(duration))
+    }
+
     func testMensagemAntigaNaoConta() {
         XCTAssertNil(SessionDetector.activeBlockEnd(timestamps: [hoursAgo(6)], now: now))
     }

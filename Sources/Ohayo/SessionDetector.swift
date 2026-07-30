@@ -86,13 +86,16 @@ struct SessionDetector: SessionDetecting {
     /// 24h cobre cadeias de blocos consecutivos (o início do bloco corrente
     /// depende do fim do bloco anterior em uso contínuo).
     static let scanInterval: TimeInterval = 24 * 3600
-    static let blockDuration: TimeInterval = 5 * 3600
+    /// Compatibilidade para migrações e testes persistidos do contrato atual.
+    /// Fluxos de produção usam `Provider.usageWindowDuration`.
+    static let blockDuration = Provider.claude.usageWindowDuration
 
     func quotaWindowState(
         account: URL,
         provider: Provider
     ) async -> QuotaWindowState {
         let fm = FileManager.default
+        let blockDuration = provider.usageWindowDuration
         var isDirectory: ObjCBool = false
         if fm.fileExists(atPath: account.path, isDirectory: &isDirectory) {
             guard isDirectory.boolValue else {
@@ -123,12 +126,16 @@ struct SessionDetector: SessionDetecting {
             // janela de varredura, a cadeia pode ter sido truncada no meio de
             // um bloco — amplia a varredura até garantir um gap de 5h à esquerda.
             if let first = timestamps.first,
-               first.timeIntervalSince(since) < Self.blockDuration,
+               first.timeIntervalSince(since) < blockDuration,
                lookback < maxLookback {
                 lookback = min(lookback * 2, maxLookback)
                 continue
             }
-            guard let end = Self.activeBlockEnd(timestamps: timestamps, now: clock.now) else {
+            guard let end = Self.activeBlockEnd(
+                timestamps: timestamps,
+                now: clock.now,
+                duration: blockDuration
+            ) else {
                 return .inactive
             }
             return .active(until: end)
@@ -139,12 +146,16 @@ struct SessionDetector: SessionDetecting {
 
     /// Blocos de 5h: início = timestamp da primeira evidência de consumo;
     /// evidência após o fim do bloco corrente abre um bloco novo.
-    static func activeBlockEnd(timestamps: [Date], now: Date) -> Date? {
+    static func activeBlockEnd(
+        timestamps: [Date],
+        now: Date,
+        duration: TimeInterval = blockDuration
+    ) -> Date? {
         var blockEnd: Date?
         for t in timestamps.sorted() {
             guard t <= now else { break }
             if blockEnd == nil || t >= blockEnd! {
-                blockEnd = t.addingTimeInterval(blockDuration)
+                blockEnd = t.addingTimeInterval(duration)
             }
         }
         guard let end = blockEnd, now < end else { return nil }

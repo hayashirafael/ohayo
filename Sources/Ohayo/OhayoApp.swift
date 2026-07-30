@@ -46,6 +46,9 @@ struct OhayoApp: App {
         }
         .defaultSize(width: 820, height: 600)
         .windowResizability(.contentMinSize)
+        .commands {
+            OhayoCommands(state: env.state)
+        }
 
         Window(env.state.strings.permissionGuideTitle, id: "permissions") {
             PermissionSetupView(state: env.state)

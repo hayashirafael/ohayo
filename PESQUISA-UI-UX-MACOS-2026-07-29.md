@@ -12,8 +12,10 @@ Plataforma mínima observada: macOS 13 (`Package.swift:6`)
 >
 > **Decisão posterior de produto:** Geral voltou para a sidebar da janela
 > central do Ohayo. Essa decisão substitui a recomendação histórica de manter
-> Ajustes em uma janela separada; o restante do documento foi preservado como
-> registro da pesquisa.
+> Ajustes em uma janela separada. O app preserva `⌘,` para abrir Geral e adota
+> temporariamente um ícone no Dock enquanto uma janela padrão precisa receber
+> foco. O restante do documento foi preservado como registro da pesquisa, não
+> como contrato do código atual.
 
 ## Resultado executivo
 

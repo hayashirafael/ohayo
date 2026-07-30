@@ -40,5 +40,7 @@ final class ProviderTests: XCTestCase {
         XCTAssertEqual(Provider.codex.envKey, "CODEX_HOME")
         XCTAssertEqual(Provider.codex.displayName, "Codex")
         XCTAssertEqual(Provider.codex.cliName, "codex")
+        XCTAssertEqual(Provider.claude.usageWindowDuration, 5 * 3600)
+        XCTAssertEqual(Provider.codex.usageWindowDuration, 5 * 3600)
     }
 }

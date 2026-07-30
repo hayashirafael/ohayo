@@ -157,7 +157,9 @@ final class RenewalEngine: ObservableObject {
     private let retryBaseDelay: TimeInterval
     private let retryJitter: (URL, Int) -> Double
     private let maximumRetryDelay: TimeInterval = 15 * 60
-    private let bootstrapCooldown: TimeInterval
+    /// Override determinístico para testes. Em produção, o cooldown acompanha
+    /// a duração da Janela de uso do Provider da conta.
+    private let bootstrapCooldownOverride: TimeInterval?
     private var accounts: Set<URL> = []
     /// Contas para as quais o usuário consentiu que a ausência de uma janela
     /// detectável resulte em um disparo imediato.
@@ -198,7 +200,7 @@ final class RenewalEngine: ObservableObject {
         detector: SessionDetecting,
         clock: Clock = SystemClock(),
         retryBaseDelay: TimeInterval = 60,
-        bootstrapCooldown: TimeInterval = SessionDetector.blockDuration,
+        bootstrapCooldown: TimeInterval? = nil,
         retryJitter: @escaping (URL, Int) -> Double =
             RenewalEngine.stableRetryJitter,
         dispatch: @escaping (
@@ -213,7 +215,7 @@ final class RenewalEngine: ObservableObject {
         self.detector = detector
         self.clock = clock
         self.retryBaseDelay = retryBaseDelay
-        self.bootstrapCooldown = bootstrapCooldown
+        self.bootstrapCooldownOverride = bootstrapCooldown
         self.retryJitter = retryJitter
         self.dispatch = dispatch
         self.persistRecovery = persistRecovery
@@ -611,7 +613,9 @@ final class RenewalEngine: ObservableObject {
         attemptedRenewal.insert(account)
         nextRenewal[account] = nil
         let trigger: Trigger = bootstrapAttempt ? .bootstrap : .scheduled
-        let crashSafeNotBefore = now.addingTimeInterval(bootstrapCooldown)
+        let crashSafeNotBefore = now.addingTimeInterval(
+            cooldownDuration(for: account)
+        )
         bootstrapNotBefore[account] = crashSafeNotBefore
         cooldownBootstrapOrigins[account] = bootstrapAttempt
         emitRecovery(
@@ -639,7 +643,9 @@ final class RenewalEngine: ObservableObject {
             clearRetry(for: account)
             needsAttentionAccounts.remove(account)
             attemptedRenewal.insert(account)
-            let staleNotBefore = clock.now.addingTimeInterval(bootstrapCooldown)
+            let staleNotBefore = clock.now.addingTimeInterval(
+                cooldownDuration(for: account)
+            )
             bootstrapNotBefore[account] = staleNotBefore
             cooldownBootstrapOrigins[account] = bootstrapAttempt
             nextRenewal[account] = nil
@@ -720,7 +726,7 @@ final class RenewalEngine: ObservableObject {
         // nunca aparece. Também é necessário para hand-offs agendados: nesses
         // casos o recovery não depende do opt-in de bootstrap inicial.
         let handoffNotBefore = completionTime.addingTimeInterval(
-            bootstrapCooldown
+            cooldownDuration(for: account)
         )
         bootstrapNotBefore[account] = handoffNotBefore
         cooldownBootstrapOrigins[account] = bootstrapAttempt
@@ -739,6 +745,12 @@ final class RenewalEngine: ObservableObject {
         bootstrapRetryAccounts.remove(account)
         retryAttempts[account] = nil
         retryNotBefore[account] = nil
+    }
+
+    private func cooldownDuration(for account: URL) -> TimeInterval {
+        bootstrapCooldownOverride
+            ?? accountProviders[account]?.usageWindowDuration
+            ?? SessionDetector.blockDuration
     }
 
     private func clearDurableRecovery(for account: URL) {

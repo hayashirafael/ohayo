@@ -403,14 +403,15 @@ struct MenuPanel: View {
     }
 
     private func openPermissions() {
-        openWindow(id: "permissions")
-        NSApp.activate(ignoringOtherApps: true)
-        closePanel()
+        AppWindowActions.presentWindow(
+            closePanel: closePanel,
+            openWindow: { openWindow(id: "permissions") }
+        )
     }
 
     /// O painel .window do MenuBarExtra não fecha sozinho ao abrir outra
     /// janela — fecha a janela do próprio painel explicitamente.
     private func closePanel() {
-        NSApp.windows.first { $0.className.contains("MenuBarExtraWindow") }?.close()
+        AppWindowActions.closeMenuBarPanel()
     }
 }

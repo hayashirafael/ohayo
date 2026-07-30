@@ -2,9 +2,10 @@
 
 **English** | [Português](README.pt-br.md)
 
-macOS menu bar app that keeps your Claude plan's 5-hour usage windows always
-open — per account, automatically. Swift + SwiftUI (`MenuBarExtra`), with
-Sparkle for secure in-app updates.
+macOS menu bar automation control center for Claude, Codex, and shell commands.
+It can chain supported 5-hour usage windows per account and run schedules
+automatically. Swift + SwiftUI (`MenuBarExtra`), with Sparkle for secure in-app
+updates.
 
 ## Why
 
@@ -12,8 +13,9 @@ Claude plans (Pro/Max) open a 5-hour usage window from your first prompt. If
 you're a heavy user, you want that window already open when you sit down to
 work — not to burn its first hour warming up. Ohayo renews each account on
 its own, and a continuous schedule never runs redundantly while a window is
-already active: it detects the current window passively from the local Claude
-Code transcripts, making no network calls of its own.
+already active. The detector reads local Claude/Codex transcripts passively
+and makes no provider API calls; Sparkle separately checks GitHub for signed
+app updates.
 
 ## Features
 
@@ -41,7 +43,7 @@ Code transcripts, making no network calls of its own.
 - **Provider Doctor** — first-run, read-only checks for CLI installation and
   login status for every configured Claude/Codex account; it never runs a
   prompt or consumes quota
-- **Language** — English by default, with a Portuguese option in Settings
+- **Language** — English by default, with a Portuguese option in **General**
 - **In-app updates** — checks the signed GitHub release feed automatically;
   install and relaunch without downloading a DMG manually
 - Per-account **Pause/Resume**, in **Accounts**, and optional **Launch at
@@ -49,8 +51,8 @@ Code transcripts, making no network calls of its own.
 
 ## Requirements
 
-- macOS 13+ (the currently published v1.1.1 binary requires Apple Silicon;
-  the next release produced by this revision is universal)
+- macOS 13+; published releases since v1.2.0 are universal for Apple Silicon
+  and Intel
 - [Claude Code](https://claude.com/claude-code) installed and logged in
   (only if you use Claude schedules)
 - [Codex CLI](https://github.com/openai/codex) installed and logged in
@@ -73,10 +75,9 @@ brew trust --cask hayashirafael/tap/ohayo
 brew install --cask ohayo
 ```
 
-Ohayo is a clean install. Remove any previous installation completely before
-installing the first Sparkle-enabled version. After that bootstrap install,
-future releases can be installed from **Ohayo → General → About → Check for
-Updates…**.
+Homebrew installs the latest published release. Installations older than v1.2.0
+need one final `brew upgrade --cask ohayo`; after that, future releases can
+also be installed from **Ohayo → General → About → Check for Updates…**.
 
 ### DMG
 
@@ -84,13 +85,13 @@ Download `Ohayo-<version>.dmg` from the
 [latest release](../../releases/latest) and drag **Ohayo** onto
 **Applications**.
 
-> The currently published v1.1.1 artifact supports Apple Silicon only. The
-> free tester distribution starting with v1.2.0 is universal for Apple Silicon
-> and Intel, ad-hoc signed, and not notarized. On first launch, Gatekeeper may
-> require right-clicking the app and selecting **Open**, or using **System
-> Settings → Privacy & Security → Open Anyway**. Once all Apple signing
-> credentials are configured, the same release workflow automatically switches
-> to Developer ID signing, hardened runtime, notarization, and stapling.
+> Published releases since v1.2.0 are universal for Apple Silicon and Intel.
+> The current free tester distribution is ad-hoc signed and not notarized. On
+> first launch, Gatekeeper may require right-clicking the app and selecting
+> **Open**, or using **System Settings → Privacy & Security → Open Anyway**.
+> Once all Apple signing credentials are configured, the same release workflow
+> automatically switches to Developer ID signing, hardened runtime,
+> notarization, and stapling.
 
 ### From source
 
@@ -105,16 +106,26 @@ open build/Ohayo.app
 
 ### Updates
 
-Version 1.2.0 is the updater bootstrap. Existing installations without Sparkle
-need this one final manual Homebrew/DMG upgrade. From 1.2.0 onward, Ohayo checks
-the signed release feed daily and offers **Install and Relaunch** in-app. Use
-**Ohayo → General → About → Check for Updates…** to check immediately.
+Version 1.2.0 introduced the updater. Installations without Sparkle need one
+final manual Homebrew/DMG upgrade. Releases from 1.2.0 onward check the signed
+feed daily and offer **Install and Relaunch** in-app. Use **Ohayo → General →
+About → Check for Updates…** to check immediately.
 
 Even in the free tester mode, release archives and the feed are
 cryptographically validated by Sparkle's separate EdDSA key. Apple Developer
 ID and notarization are intentionally deferred; until then, the first install
 does not have Apple's Gatekeeper trust. The GitHub release workflow publishes
 the final DMG and its signed `appcast.xml` together.
+
+## Quick start
+
+1. Open Ohayo and complete or dismiss the non-blocking setup guide.
+2. In **Accounts**, confirm the Claude/Codex accounts you want to use.
+3. In **Schedules**, choose **New Schedule…** and configure its command.
+4. Select **Continuous** to chain detected usage windows, or **Fixed times** for
+   specific times and weekdays.
+5. Use the menu bar panel for upcoming runs and **History** for outcomes and
+   captured failure details.
 
 ## Usage
 
@@ -149,23 +160,23 @@ sections:
   new schedules start with an empty command field. Jumping in from a schedule in
   the menu panel filters this list to that account, with a chip to clear the
   filter
-- **Skill (optional):** for Claude/Codex schedules, pick a skill installed in the
-  target account, user scope, or selected repository. Ohayo resolves Claude
-  account/plugin skills plus ancestor `.claude/skills`, and Codex account
-  skills plus `$HOME/.agents/skills`, ancestor `.agents/skills`, and skills
-  exposed by plugins that the selected account reports as installed and
-  enabled through `codex plugin list --json`. The inventory check is
-  read-only and never runs a prompt. Each run prefixes the skill to the
-  command (`/skill command` for Claude, `$skill command` for Codex). Selecting
-  a skill loads Claude customizations; the UI makes clear that this expands
-  context and is not a filesystem sandbox
+  - **Optional skill:** for Claude/Codex schedules, pick a skill installed in
+    the target account, user scope, or selected repository. Ohayo resolves
+    Claude account/plugin skills plus ancestor `.claude/skills`, and Codex
+    account skills plus `$HOME/.agents/skills`, ancestor `.agents/skills`, and
+    skills exposed by plugins that the selected account reports as installed
+    and enabled through `codex plugin list --json`. The inventory check is
+    read-only and never runs a prompt. Each run prefixes the skill to the
+    command (`/skill command` for Claude, `$skill command` for Codex). Selecting
+    a skill loads Claude customizations; the UI makes clear that this expands
+    context and is not a filesystem sandbox
 - **History** — recent runs as cards with status, provider icon, model,
   account alias/email, command, response and error details; filterable by
   account the same way as Schedules
 - **General** — Launch at Login, time remaining in the menu bar, sensitive
   notification details (off by default), how many upcoming runs the menu panel
   shows (1–5), Language (English or Portuguese), system access, the app
-  version, and **Check for Updates…**
+  version, and **Check for Updates…**. Open it from **Settings…** or with `⌘,`
 
 ### First-run permissions
 
