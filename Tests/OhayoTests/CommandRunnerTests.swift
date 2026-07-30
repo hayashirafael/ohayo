@@ -682,7 +682,11 @@ final class CommandRunnerTests: XCTestCase {
         let output = try result.get()
         XCTAssertTrue(output.contains("exec"))
         XCTAssertTrue(output.contains("--model gpt-5.5"))
-        XCTAssertTrue(output.contains("--sandbox workspace-write"))
+        XCTAssertTrue(
+            output.contains(
+                "--dangerously-bypass-approvals-and-sandbox"
+            )
+        )
         XCTAssertTrue(output.contains("--skip-git-repo-check"))
         XCTAssertTrue(output.contains("--color never"))
         XCTAssertTrue(output.contains(#"model_reasoning_effort="low""#))
@@ -711,7 +715,8 @@ final class CommandRunnerTests: XCTestCase {
         let args = try String(contentsOf: argsFile, encoding: .utf8)
             .split(separator: "\n")
             .map(String.init)
-        XCTAssertEqual(args, ["exec", "--sandbox", "workspace-write",
+        XCTAssertEqual(args, ["exec",
+                              "--dangerously-bypass-approvals-and-sandbox",
                               "--skip-git-repo-check", "--color", "never"])
         XCTAssertEqual(try String(contentsOf: stdinFile, encoding: .utf8), "segredo codex")
     }
@@ -736,7 +741,8 @@ final class CommandRunnerTests: XCTestCase {
             text: "crie um arquivo",
             kind: .codex,
             workingDir: workingDirectory.path,
-            trustWorkingDirectory: true
+            trustWorkingDirectory: true,
+            codexAllowFullAccess: false
         )
 
         let result = await runner.run(dispatch(message))
@@ -776,7 +782,8 @@ final class CommandRunnerTests: XCTestCase {
             text: "revise sem alterar",
             kind: .codex,
             workingDir: workingDirectory.path,
-            trustWorkingDirectory: false
+            trustWorkingDirectory: false,
+            codexAllowFullAccess: false
         )
 
         let result = await runner.run(dispatch(message))
@@ -812,7 +819,8 @@ final class CommandRunnerTests: XCTestCase {
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.isEmpty }
             .map(String.init)
-        XCTAssertEqual(args, ["exec", "--sandbox", "workspace-write",
+        XCTAssertEqual(args, ["exec",
+                              "--dangerously-bypass-approvals-and-sandbox",
                               "--skip-git-repo-check", "--color", "never"])
     }
 
@@ -831,7 +839,8 @@ final class CommandRunnerTests: XCTestCase {
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.isEmpty }
             .map(String.init)
-        XCTAssertEqual(args, ["exec", "--model", "gpt-5.5", "--sandbox", "workspace-write",
+        XCTAssertEqual(args, ["exec", "--model", "gpt-5.5",
+                              "--dangerously-bypass-approvals-and-sandbox",
                               "--skip-git-repo-check", "--color", "never",
                               "-c", "model_reasoning_effort=\"high\""])
     }
@@ -898,7 +907,8 @@ final class CommandRunnerTests: XCTestCase {
             .filter { !$0.isEmpty }
             .map(String.init)
         XCTAssertEqual(captured,
-                       ["exec", "--sandbox", "workspace-write", "--skip-git-repo-check",
+                       ["exec", "--dangerously-bypass-approvals-and-sandbox",
+                        "--skip-git-repo-check",
                         "--color", "never"])
         XCTAssertEqual(try String(contentsOf: stdinFile, encoding: .utf8), "$gmud oi")
     }

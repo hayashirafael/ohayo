@@ -43,6 +43,34 @@ final class AppState: ObservableObject {
         }
     }
 
+    @Published private(set) var favoriteResponseDirectories: [String] {
+        didSet {
+            defaults.set(
+                favoriteResponseDirectories,
+                forKey: Keys.favoriteResponseDirectories
+            )
+        }
+    }
+
+    func isResponseDirectoryFavorite(_ directory: URL) -> Bool {
+        favoriteResponseDirectories.contains(
+            Self.canonicalResponseDirectory(directory)
+        )
+    }
+
+    func setResponseDirectoryFavorite(
+        _ directory: URL,
+        _ favorite: Bool
+    ) {
+        let path = Self.canonicalResponseDirectory(directory)
+        if favorite {
+            guard !favoriteResponseDirectories.contains(path) else { return }
+            favoriteResponseDirectories.append(path)
+        } else {
+            favoriteResponseDirectories.removeAll { $0 == path }
+        }
+    }
+
     /// Último disparo — cabeçalho do menu.
     var lastEvent: FireEvent? { history.first }
 
@@ -62,8 +90,16 @@ final class AppState: ObservableObject {
 
     /// Cria um evento com um snapshot mínimo da identidade. A UI prefere os
     /// dados atuais da conta e usa o snapshot quando ela não existe mais.
-    func makeEvent(date: Date, result: FireResult, message: Message,
-                   origin: FireOrigin, response: String? = nil) -> FireEvent {
+    func makeEvent(
+        date: Date,
+        result: FireResult,
+        message: Message,
+        origin: FireOrigin,
+        response: String? = nil,
+        responseFileFormat: ResponseFileFormat? = nil,
+        responseFilePath: String? = nil,
+        responseFileError: String? = nil
+    ) -> FireEvent {
         let provider: Provider?
         let accountDir: URL?
         let modelName: String?
@@ -88,7 +124,10 @@ final class AppState: ObservableObject {
             accountPath: accountDir?.standardizedFileURL.path, provider: provider,
             modelName: modelName,
             aliasSnapshot: accountDir.flatMap { alias(for: $0) },
-            emailSnapshot: accountDir.flatMap { email(for: $0) }
+            emailSnapshot: accountDir.flatMap { email(for: $0) },
+            responseFileFormat: responseFileFormat,
+            responseFilePath: responseFilePath,
+            responseFileError: responseFileError
         )
     }
 
@@ -655,6 +694,8 @@ final class AppState: ObservableObject {
     private enum Keys {
         static let pausedAccounts = "pausedAccounts"
         static let history = "history"
+        static let favoriteResponseDirectories =
+            "favoriteResponseDirectories"
         static let showRemainingInBar = "showRemainingInBar"
         static let showSensitiveNotificationDetails = "showSensitiveNotificationDetails"
         static let panelUpcomingCount = "panelUpcomingCount"
@@ -674,6 +715,10 @@ final class AppState: ObservableObject {
         ProviderAccountContext.canonicalAccountDirectory(
             URL(fileURLWithPath: path)
         ).path
+    }
+
+    private static func canonicalResponseDirectory(_ directory: URL) -> String {
+        directory.standardizedFileURL.path
     }
 
     private static func canonicalizedMap(
@@ -770,10 +815,21 @@ final class AppState: ObservableObject {
         return result
     }
 
-    init(defaults: UserDefaults = .standard,
+    init(defaults: UserDefaults = AppRuntimeProfile.defaultUserDefaults(),
          home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.defaults = defaults
         self.homeDirectory = home.standardizedFileURL
+        var seenResponseDirectories: Set<String> = []
+        self.favoriteResponseDirectories = (
+            defaults.array(forKey: Keys.favoriteResponseDirectories)
+                as? [String] ?? []
+        ).compactMap { path in
+            let canonical = Self.canonicalResponseDirectory(
+                URL(fileURLWithPath: path, isDirectory: true)
+            )
+            return seenResponseDirectories.insert(canonical).inserted
+                ? canonical : nil
+        }
         self.previousAliveAt = defaults.object(forKey: Keys.lastAliveAt) as? Date
         let loadedRecoveryStates: [String: RenewalRecoveryState]
         let recoveryBlobWasCorrupt: Bool

@@ -372,6 +372,32 @@ final class AppStateTests: XCTestCase {
         )
     }
 
+    func testPastasFavoritasDeRespostaPersistemSemDuplicatas() {
+        let defaults = freshDefaults()
+        let state = AppState(defaults: defaults)
+        let directory = URL(fileURLWithPath: "/tmp/relatorios")
+
+        state.setResponseDirectoryFavorite(directory, true)
+        state.setResponseDirectoryFavorite(
+            URL(fileURLWithPath: "/tmp/./relatorios"),
+            true
+        )
+
+        XCTAssertTrue(state.isResponseDirectoryFavorite(directory))
+        XCTAssertEqual(state.favoriteResponseDirectories, ["/tmp/relatorios"])
+        XCTAssertEqual(
+            AppState(defaults: defaults).favoriteResponseDirectories,
+            ["/tmp/relatorios"]
+        )
+
+        state.setResponseDirectoryFavorite(directory, false)
+
+        XCTAssertFalse(state.isResponseDirectoryFavorite(directory))
+        XCTAssertTrue(
+            AppState(defaults: defaults).favoriteResponseDirectories.isEmpty
+        )
+    }
+
     func testHistoricoCapEm20MaisRecentePrimeiro() {
         let state = AppState(defaults: freshDefaults())
         for i in 0..<25 {

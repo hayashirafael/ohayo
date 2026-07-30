@@ -420,11 +420,73 @@ final class TerminalLauncherTests: XCTestCase {
         XCTAssertTrue(spec.terminalScript.contains("'/tmp/fake-codex'"))
         XCTAssertTrue(spec.terminalScript.contains("'--model' 'gpt-5.5'"))
         XCTAssertTrue(
-            spec.terminalScript.contains("'--sandbox' 'workspace-write'")
+            spec.terminalScript.contains(
+                "'--dangerously-bypass-approvals-and-sandbox'"
+            )
         )
         XCTAssertTrue(spec.terminalScript.contains("'-c' 'model_reasoning_effort=\"high\"'"))
         XCTAssertTrue(spec.terminalScript.contains("'revise isso'"))
         XCTAssertFalse(spec.terminalScript.contains("'exec'"))
+    }
+
+    func testCodexInterativoWorkspaceWriteConfiaSomenteAPasta() throws {
+        let workingDir = "/tmp/projeto codex"
+        let message = Message(
+            text: "edite somente aqui",
+            kind: .codex,
+            workingDir: workingDir,
+            trustWorkingDirectory: true,
+            codexAllowFullAccess: false
+        )
+
+        let spec = try XCTUnwrap(
+            TerminalLauncher.spec(
+                for: message,
+                codexBinary: URL(fileURLWithPath: "/tmp/codex")
+            )
+        )
+        let trustOverride = TerminalLauncher.codexTrustOverride(
+            workingDir: workingDir
+        )
+
+        XCTAssertTrue(
+            spec.terminalScript.contains("'--sandbox' 'workspace-write'")
+        )
+        XCTAssertTrue(
+            spec.terminalScript.contains("'-c' '\(trustOverride)'")
+        )
+        XCTAssertFalse(
+            spec.terminalScript.contains(
+                "--dangerously-bypass-approvals-and-sandbox"
+            )
+        )
+        XCTAssertFalse(spec.terminalScript.contains("'read-only'"))
+    }
+
+    func testCodexInterativoReadOnlyNaoConfiaPastaNemCombinaPoliticas() throws {
+        let message = Message(
+            text: "somente leia",
+            kind: .codex,
+            workingDir: "/tmp/projeto codex",
+            trustWorkingDirectory: false,
+            codexAllowFullAccess: false
+        )
+
+        let spec = try XCTUnwrap(
+            TerminalLauncher.spec(
+                for: message,
+                codexBinary: URL(fileURLWithPath: "/tmp/codex")
+            )
+        )
+
+        XCTAssertTrue(spec.terminalScript.contains("'--sandbox' 'read-only'"))
+        XCTAssertFalse(spec.terminalScript.contains("workspace-write"))
+        XCTAssertFalse(spec.terminalScript.contains("trust_level"))
+        XCTAssertFalse(
+            spec.terminalScript.contains(
+                "--dangerously-bypass-approvals-and-sandbox"
+            )
+        )
     }
 
     func testAppleScriptEscapaComandoParaDoScript() {

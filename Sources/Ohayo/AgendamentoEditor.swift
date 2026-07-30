@@ -22,7 +22,11 @@ struct AgendamentoDraft: Equatable {
     var safeMode = Message.defaultSafeMode
     var codexModel = ""
     var codexReasoning: Message.CodexReasoning?
+    var codexAccessMode: CodexAccessMode = .fullAccess
     var outputMode: AgendamentoOutputMode = .terminal
+    var responseFormat: ResponseFileFormat = .markdown
+    var responseDirectory: String
+    var favoriteResponseDirectory = false
     var timeoutSeconds: Int?
     var notifyOnSuccess = false
     var account: String?
@@ -37,10 +41,12 @@ struct AgendamentoDraft: Equatable {
 
     init(
         editing task: ScheduledTask?,
+        defaultResponseDirectory: URL = AppPaths.responsesDirectory(),
         newID: @autoclosure () -> UUID = UUID()
     ) {
         uid = task?.uid ?? newID()
         base = task
+        responseDirectory = defaultResponseDirectory.standardizedFileURL.path
         guard let task else { return }
 
         name = task.name ?? ""
@@ -66,7 +72,11 @@ struct AgendamentoDraft: Equatable {
         safeMode = message.resolvedSafeMode
         codexModel = message.codexModel ?? ""
         codexReasoning = message.codexReasoning
+        codexAccessMode = message.resolvedCodexAccessMode
         outputMode = Self.outputMode(for: message)
+        responseFormat = message.resolvedResponseFileFormat
+        responseDirectory = message.responseDirectory
+            ?? defaultResponseDirectory.standardizedFileURL.path
         timeoutSeconds = message.timeoutSeconds
         notifyOnSuccess = Self.effectiveNotifyOnSuccess(
             message.resolvedNotifyOnSuccess,
@@ -88,6 +98,13 @@ struct AgendamentoDraft: Equatable {
 
     static func showsTimeout(for outputMode: AgendamentoOutputMode) -> Bool {
         outputMode != .terminal
+    }
+
+    static func supportsResponseFile(
+        kind: Message.Kind,
+        outputMode: AgendamentoOutputMode
+    ) -> Bool {
+        kind != .shell && outputMode == .response
     }
 
     static func effectiveNotifyOnSuccess(
@@ -131,6 +148,24 @@ struct AgendamentoDraft: Equatable {
         let trimmedModel = codexModel.trimmingCharacters(
             in: .whitespaces
         )
+        let trimmedResponseDirectory = responseDirectory.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let savesResponseFile = Self.supportsResponseFile(
+            kind: kind,
+            outputMode: outputMode
+        )
+        let persistedTrustWorkingDirectory: Bool?
+        switch kind {
+        case .codex:
+            persistedTrustWorkingDirectory =
+                codexAccessMode.persistedTrustWorkingDirectory
+        case .claude:
+            persistedTrustWorkingDirectory =
+                !workingDir.isEmpty && !trustWorkingDirectory ? false : nil
+        case .shell:
+            persistedTrustWorkingDirectory = nil
+        }
         let command = Message(
             text: trimmedText,
             kind: kind,
@@ -144,10 +179,7 @@ struct AgendamentoDraft: Equatable {
             configDir: effectiveAccount,
             workingDir: kind != .shell && !workingDir.isEmpty
                 ? workingDir : nil,
-            trustWorkingDirectory: kind != .shell
-                && !workingDir.isEmpty
-                && !trustWorkingDirectory
-                ? false : nil,
+            trustWorkingDirectory: persistedTrustWorkingDirectory,
             showResponse: outputMode == .response ? true : nil,
             runInTerminal: kind != .shell && outputMode != .terminal
                 ? false : nil,
@@ -162,6 +194,13 @@ struct AgendamentoDraft: Equatable {
             codexModel: kind == .codex && !trimmedModel.isEmpty
                 ? trimmedModel : nil,
             codexReasoning: kind == .codex ? codexReasoning : nil,
+            codexAllowFullAccess: kind == .codex
+                ? codexAccessMode.persistedFullAccess : nil,
+            responseFileFormat: savesResponseFile
+                ? responseFormat : nil,
+            responseDirectory: savesResponseFile
+                && !trimmedResponseDirectory.isEmpty
+                ? trimmedResponseDirectory : nil,
             skill: kind != .shell && skill?.isEmpty == false ? skill : nil
         )
         let trimmedName = name.trimmingCharacters(

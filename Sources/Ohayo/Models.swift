@@ -1,5 +1,35 @@
 import Foundation
 
+enum ResponseFileFormat: String, Codable, CaseIterable {
+    case markdown
+    case plainText
+
+    var fileExtension: String {
+        switch self {
+        case .markdown: return "md"
+        case .plainText: return "txt"
+        }
+    }
+}
+
+enum CodexAccessMode: Hashable, CaseIterable {
+    case fullAccess
+    case workspaceWrite
+    case readOnly
+
+    var persistedFullAccess: Bool? {
+        self == .fullAccess ? nil : false
+    }
+
+    var persistedTrustWorkingDirectory: Bool? {
+        switch self {
+        case .fullAccess: return nil
+        case .workspaceWrite: return true
+        case .readOnly: return false
+        }
+    }
+}
+
 enum FireResult: Codable, Equatable {
     case success
     /// A sessão interativa foi aberta no Terminal; o Ohayo não acompanha o
@@ -24,6 +54,9 @@ struct FireEvent: Codable, Equatable {
     var modelName: String? = nil
     var aliasSnapshot: String? = nil
     var emailSnapshot: String? = nil
+    var responseFileFormat: ResponseFileFormat? = nil
+    var responseFilePath: String? = nil
+    var responseFileError: String? = nil
 }
 
 struct EventIdentity: Equatable {
@@ -39,7 +72,9 @@ struct EventIdentity: Equatable {
 struct Message: Codable, Identifiable {
     enum Kind: String, Codable { case claude, shell, codex }
     enum CodexReasoning: String, Codable, CaseIterable {
-        case minimal, low, medium, high, xhigh
+        /// `minimal` é mantido para decodificar agendamentos criados por
+        /// versões anteriores. O catálogo atual da conta decide se ele aparece.
+        case none, minimal, low, medium, high, xhigh, max, ultra
     }
     enum Model: String, Codable, CaseIterable {
         case haiku, sonnet, opus
@@ -80,6 +115,12 @@ struct Message: Codable, Identifiable {
     var notifyOnSuccess: Bool? = nil
     var codexModel: String? = nil
     var codexReasoning: CodexReasoning? = nil
+    /// Compatibilidade persistida do acesso Codex: `nil` mantém acesso total;
+    /// `false` combina com o trust da pasta para representar escrita restrita
+    /// ou somente leitura. A UI usa `CodexAccessMode`.
+    var codexAllowFullAccess: Bool? = nil
+    var responseFileFormat: ResponseFileFormat? = nil
+    var responseDirectory: String? = nil
     /// Skill da conta prefixada ao prompt no disparo (`/skill` no Claude,
     /// `$skill` no Codex). nil/vazia = sem skill. Só Claude/Codex.
     var skill: String? = nil
@@ -97,12 +138,15 @@ struct Message: Codable, Identifiable {
         let timeoutValue = timeoutSeconds.map(String.init) ?? ""
         let notifyOnSuccessValue = notifyOnSuccess.map(String.init) ?? ""
         let reasoningValue = codexReasoning?.rawValue ?? ""
+        let fullAccessValue = codexAllowFullAccess.map(String.init) ?? ""
+        let responseFormatValue = responseFileFormat?.rawValue ?? ""
         let values = [
             kind.rawValue, text, modelValue, effortValue, safeModeValue,
             configDir ?? "", workingDir ?? "", showResponseValue,
             runInTerminalValue, trustWorkingDirectoryValue, timeoutValue,
             notifyOnSuccessValue,
-            codexModel ?? "", reasoningValue, skill ?? ""
+            codexModel ?? "", reasoningValue, fullAccessValue,
+            responseFormatValue, responseDirectory ?? "", skill ?? ""
         ]
         return values.joined(separator: "\u{1}")
     }
@@ -119,6 +163,9 @@ extension Message: Equatable {
             && lhs.timeoutSeconds == rhs.timeoutSeconds
             && lhs.notifyOnSuccess == rhs.notifyOnSuccess
             && lhs.codexModel == rhs.codexModel && lhs.codexReasoning == rhs.codexReasoning
+            && lhs.codexAllowFullAccess == rhs.codexAllowFullAccess
+            && lhs.responseFileFormat == rhs.responseFileFormat
+            && lhs.responseDirectory == rhs.responseDirectory
             && lhs.skill == rhs.skill
     }
 }
@@ -158,17 +205,34 @@ extension Message {
     }
     var resolvedShowResponse: Bool { showResponse ?? false }
     var resolvedNotifyOnSuccess: Bool { notifyOnSuccess ?? false }
+    var resolvedCodexAccessMode: CodexAccessMode {
+        if codexAllowFullAccess == false {
+            return trustWorkingDirectory == true
+                ? .workspaceWrite
+                : .readOnly
+        }
+        return trustWorkingDirectory == false ? .readOnly : .fullAccess
+    }
+    var resolvedCodexAllowFullAccess: Bool {
+        resolvedCodexAccessMode == .fullAccess
+    }
+    var resolvedResponseFileFormat: ResponseFileFormat {
+        responseFileFormat ?? .markdown
+    }
     var resolvedRunInTerminal: Bool {
         switch kind {
         case .claude, .codex: return runInTerminal ?? true
         case .shell: return false
         }
     }
-    /// O workspace interno pertence ao Ohayo e é sempre confiável. Pastas
-    /// escolhidas em versões anteriores também mantêm o consentimento
-    /// implícito; somente `false` persistido devolve o prompt ao provider.
+    /// O workspace interno pertence ao Ohayo. Em pasta explícita, `false`
+    /// revoga a autorização antecipada. Para Codex, o modo somente leitura
+    /// também mantém o trust desativado mesmo no workspace interno.
     var resolvedTrustWorkingDirectory: Bool {
         guard kind != .shell else { return false }
+        if kind == .codex, resolvedCodexAccessMode == .readOnly {
+            return false
+        }
         let hasExplicitDirectory =
             workingDir?.trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty == false
@@ -225,6 +289,9 @@ struct ScheduledTask: Identifiable, Equatable {
         values.append(message.notifyOnSuccess.map(String.init) ?? "")
         values.append(message.codexModel ?? "")
         values.append(message.codexReasoning?.rawValue ?? "")
+        values.append(message.codexAllowFullAccess.map(String.init) ?? "")
+        values.append(message.responseFileFormat?.rawValue ?? "")
+        values.append(message.responseDirectory ?? "")
         values.append(message.skill ?? "")
         return values.joined(separator: "\u{1}")
     }

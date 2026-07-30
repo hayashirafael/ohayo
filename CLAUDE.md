@@ -24,12 +24,12 @@ account.
   pauses, aliases, queues, schedulers, cooldowns or conflict checks. Launching
   the app does not rewrite legacy task payloads merely to canonicalize them;
   the form normalizes their account selection when edited.
-- **Window** — the plan's 5-hour usage block. Inferred passively from local
+- **Usage Window / Janela de uso** — the plan's 5-hour usage block. Inferred passively from local
   transcripts. Evidence is fail-closed: Claude requires a non-synthetic,
   non-error assistant event with positive token usage; Codex requires a
   `token_count` event with positive `last_token_usage`. Auth/model/network
   errors and zero-token events do not open a fictional window.
-- **Agendamento** (`ScheduledTask`) — the single unified concept: a command
+- **Schedule / Agendamento** (`ScheduledTask`) — the single unified concept: a command
   dispatched either **continuously** or on **fixed times**. Carries an embedded
   prompt (`command: Message`), an optional name, an `enabled` toggle, and a
   `repetition`:
@@ -42,14 +42,20 @@ account.
   - `fixed` — fixed times × weekdays (`AgendaMath`), driven by `TaskScheduler`,
     with a single catch-up on wake.
   There is no `AppState.renewals` dict and no command library any more.
-- **hi** — the dispatch that opens/renews a window.
-- **Message** — the embedded content of an agendamento: a Claude prompt
+- **Run / Disparo** — a traceable execution occurrence.
+- **Command / Comando** (`Message`) — the embedded content of a Schedule: a Claude prompt
   (configurable model, effort, safe-mode, working dir), a Codex prompt
-  (configurable model, reasoning effort, account), or a raw shell command.
+  (account-aware model catalog, supported reasoning effort, three-state access
+  policy, working dir), or a raw shell command.
   Default message: `1+1` · Haiku · low effort · safe-mode (uid `…0001`,
   `AppState.defaultMessage`); Codex has its own minimal default
   (`AppState.defaultCodexMessage`, uid `…0002`). Codex with no explicit model
   omits `--model` (and reasoning) so the account's `config.toml` default wins.
+  Full access is on by default for new Codex Schedules; the other explicit
+  modes are trusted-folder `workspace-write` and `read-only`. A provider
+  Command that shows its response also stores `.md` (default) or `.txt` output in the selected folder
+  (default `~/Library/Application Support/Ohayo/Responses`, isolated as
+  `Ohayo Dev/Responses` in the development profile).
   Claude/Codex default to an interactive Terminal hand-off; `runInTerminal:
   false` is batch. Batch timeout is configurable (`timeoutSeconds`), defaulting
   to 900s for providers and 300s for shell; Terminal is unsupervised and has no
@@ -72,6 +78,9 @@ account.
   change provider.
 ## Architecture map
 
+- `AppRuntimeProfile.swift` — resolve produção somente para o bundle ID
+  oficial. `Ohayo Dev.app` e `swift run Ohayo` compartilham identidade de
+  desenvolvimento, preferências, Application Support e políticas isoladas.
 - `AppState.swift` — central observable state and UserDefaults persistence for
   unified agendamentos. Pause is per account: `pausedAccounts: Set<String>`
   (canonical paths, persisted). Typed renewal recovery
@@ -85,8 +94,10 @@ account.
   `accountFilter: URL?` is the deep-link the menu panel sets to scope the
   Schedules/History sections to one account
   (`taskMatchesFilter`/`matchesFilter`), with a clear-filter chip in both.
-  Account-provider registrations, notification privacy and the bounded history
-  are persisted; `clearHistory()` deletes the local history blob.
+  Account-provider registrations, favorite response folders, notification
+  privacy and the bounded history are persisted; `clearHistory()` deletes the
+  local history blob. History events retain the response format, saved-file
+  path and any file-write error.
 - `AppEnvironment.swift` — composition root; wires both engines ↔ controller,
   observes sleep/wake and `$tasks` (single `reconfigureSchedules`: continuous
   agendamentos feed `RenewalEngine`, fixed ones `TaskScheduler`).
@@ -115,31 +126,41 @@ account.
   `paused`, `retryableFailure`, `needsAttention`). Runs are FIFO per
   provider/account, while different accounts may advance concurrently; jobs
   are never discarded by a global busy flag. Terminal hand-off records
-  `.launched`, never `.success`. Notification details are private by default
-  and only include prompt/response/error/account after explicit opt-in.
+  `.launched`, never `.success`. Completed visible provider responses are
+  written through `ResponseFileWriting`; the full captured output goes to the
+  file while history keeps a bounded preview. A file-write failure is recorded
+  without reclassifying a successful provider run. Notification details are
+  private by default and only include prompt/response/error/account after
+  explicit opt-in.
 - `Provider.swift` — the claude/codex axis: folder-content detection,
   transcripts subpath, usage-window duration, environment key, CLI binary name,
   display name.
+- `CodexModelCatalog.swift` — decodes the selected account's
+  `models_cache.json`, exposes only `list` models and their supported reasoning
+  efforts, and fails closed to a current Sol/Terra/Luna fallback catalog.
 - `CommandRunner.swift` — subprocess: `claude -p --model … --effort …
-  [--safe-mode]`, `codex exec [--model …] --sandbox
-  <workspace-write|read-only>
-  --skip-git-repo-check --color never [-c model_reasoning_effort=…]`
-  (`workspace-write` for a trusted working directory, `read-only` after an
-  explicit opt-out; model/reasoning flags omitted when unset → account
-  default), or login-shell command. Claude/Codex prompts come from stdin, not
-  argv; shell remains `-l -c`. `ProviderAccountContext` applies the
-  correct native/custom environment. Provider batch runs without an explicit
-  working directory use `AppPaths.workspaceDirectory()` instead of the home;
-  shell keeps its historical home default. Timeouts come from the message,
+  [--safe-mode]`, `codex exec [--model …]` with
+  `--dangerously-bypass-approvals-and-sandbox` (full access),
+  `--sandbox workspace-write` (folder write), or `--sandbox read-only`,
+  followed by `--skip-git-repo-check --color never` and optional reasoning.
+  Model/reasoning flags are omitted when unset so the account default applies.
+  Claude/Codex prompts come from stdin, not argv; shell remains `-l -c`.
+  `ProviderAccountContext` applies the correct native/custom environment.
+  Provider batch runs without an explicit working directory use
+  `AppPaths.workspaceDirectory()` for the active profile instead of the home;
+  shell keeps its historical home default. Timeouts come from the command,
   output is capped as UTF-8-safe head + tail, and timeout termination targets
   only positive PIDs observed in the process tree (SIGTERM then best-effort
   SIGKILL).
+- `ResponseFileWriter.swift` — creates the selected output folder and writes
+  complete provider responses atomically to unique `.md`/`.txt` files.
 - `TerminalLauncher.swift` — disparo interativo (`message.resolvedRunInTerminal`):
   abre uma sessão no Terminal.app via AppleScript rodando um `.sh` temporário
   privado (0600, traps de auto-`rm`, limpeza de resíduos antigos); aplica o
   contexto de conta correto e faz `cd` para o working dir
-  (default `~/Library/Application Support/Ohayo/workspace` — nunca o home, cujo
-  trust não persiste). `seedTrust` grava `hasTrustDialogAccepted` em
+  (default `~/Library/Application Support/{Ohayo|Ohayo Dev}/workspace` — nunca
+  o home, cujo trust não persiste). `seedTrust` grava
+  `hasTrustDialogAccepted` em
   `projects[<dir>]` no `.claude.json` para o workspace ou diretório cujo
   `trustWorkingDirectory` efetivo esteja ativo, preservando o restante do
   arquivo. Ao salvar, `AgendamentoEditor` tenta ler a pasta explícita para
@@ -169,10 +190,11 @@ account.
   with matching manifests are exposed as `plugin:skill`. Responses are
   generation-guarded in the form so an old account lookup cannot overwrite a
   newer selection.
-- `SingleInstanceLock.swift` — `flock` on
-  `~/Library/Application Support/Ohayo/instance.lock`. A second launch
-  (dev binary or packaged .app) alerts and exits before `AppEnvironment`
-  exists, avoiding duplicate schedules and history clobbering.
+- `SingleInstanceLock.swift` — `flock` por perfil em
+  `~/Library/Application Support/Ohayo/instance.lock` ou
+  `~/Library/Application Support/Ohayo Dev/instance.lock`. Uma segunda
+  instância do mesmo perfil alerta e sai antes de `AppEnvironment` existir;
+  produção e desenvolvimento podem coexistir.
 - UI: `MenuBarLabel.swift` (just the bar glyph — filled while any account has
   an active window, `!` on error, faded when every scheduled account is
   paused; optional remaining-time text) + `MenuPanel.swift` (the
@@ -206,8 +228,9 @@ account.
   deep-link, with a clear-filter chip) + `AgendamentoFormSheet`
   (fixed times as chips via `TimeChipsEditor`, 5h chain generator, day
   presets, next-fire preview), `HistoryTab` (also filterable by
-  `accountFilter`, distinguishes Terminal `.launched`, and clears all local
-  history behind a destructive confirmation), `GeneralTab` (including the
+  `accountFilter`, renders Markdown responses, links to saved response files,
+  distinguishes Terminal `.launched`, and clears all local history behind a
+  destructive confirmation), `GeneralTab` (including the
   default-off sensitive-notification-details toggle). The first-run
   `PermissionSetupView` embeds the passive Provider Doctor before the macOS
   permission controls. `NSDocumentsFolderUsageDescription` is localized in the
@@ -224,6 +247,8 @@ swift test                      # full suite
 swift test --filter <Class>     # focused
 swift run Ohayo                 # run the menu bar app locally
 ./scripts/make-app.sh           # build/Ohayo.app (ad-hoc unless Developer ID env is set)
+./scripts/make-dev-app.sh       # build/Ohayo Dev.app with isolated runtime identity
+open "build/Ohayo Dev.app" --args --ui-testing # expose central window for Computer Use
 ./scripts/make-dmg.sh           # build/Ohayo-<version>.dmg
 ```
 

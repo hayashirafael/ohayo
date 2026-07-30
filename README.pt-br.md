@@ -25,20 +25,23 @@ consulta separadamente o GitHub para buscar atualizações assinadas do app.
   ativa, a menos que você desligue esse comportamento) ou **Horários fixos**
   (horários × dias da semana). Tudo na seção **Agendamentos**
 - **Comandos configuráveis** — um prompt do Claude (modelo, esforço,
-  safe-mode, pasta de trabalho), um prompt do Codex (modelo, esforço de
-  raciocínio, pasta de trabalho), ou qualquer comando shell — embutido direto
-  no agendamento. Prompts Claude/Codex abrem no Terminal.app por padrão, para
-  você continuar interagindo na mesma sessão; se desligar essa opção, rodam em
-  modo batch
+  safe-mode, pasta de trabalho), um prompt do Codex (modelos e esforços de
+  raciocínio descobertos na conta selecionada, acesso total por padrão com
+  alternativas de escrita na pasta e somente leitura, pasta de trabalho), ou
+  qualquer comando shell — embutido direto no agendamento. Prompts
+  Claude/Codex abrem no Terminal.app por padrão, para você continuar
+  interagindo na mesma sessão; se desligar essa opção, rodam em modo batch
 - **Multi-conta, Claude e Codex** — as pastas padrão (`~/.claude`, `~/.codex`)
   são detectadas automaticamente quando existem; outras pastas `~/.claude*`
   entram uma única vez, na primeira abertura, e daí em diante novas contas são
   adicionadas a qualquer momento via "Adicionar conta…" — mostra o e-mail
   logado, aceita apelidos
-- **Histórico** — disparos recentes com status e resposta expansível (log
-  capturado de stdout/stderr nas falhas), incluindo o estado separado
-  **Iniciado** para sessões interativas no Terminal; pode ser limpo a qualquer
-  momento
+- **Histórico e arquivos de resposta** — disparos recentes com status e
+  resposta expansível (Markdown é formatado quando selecionado, e o
+  stdout/stderr das falhas continua disponível), incluindo o estado separado
+  **Iniciado** para sessões interativas no Terminal. Respostas batch do
+  Claude/Codex podem ser salvas em `.md` (padrão) ou `.txt` numa pasta
+  escolhida, com pastas favoritas para reutilização
 - **Notificações privadas por padrão** — notificações do macOS escondem
   prompt, resposta, erro e conta até você habilitar explicitamente os detalhes
   em **Geral**
@@ -106,6 +109,27 @@ swift test            # suíte de testes
 ./scripts/make-dmg.sh # build/Ohayo-<versão>.dmg (requer `brew install create-dmg`)
 open build/Ohayo.app
 ```
+
+Para um build local isolado que pode rodar junto do app instalado pelo DMG:
+
+```bash
+./scripts/make-dev-app.sh
+open "build/Ohayo Dev.app"
+orca computer get-app-state --app io.github.hayashirafael.Ohayo.dev --json
+```
+
+Se o Computer Use não conseguir inspecionar diretamente a superfície da menu
+bar, exponha a janela central do app no canal de desenvolvimento:
+
+```bash
+open "build/Ohayo Dev.app" --args --ui-testing
+```
+
+O `Ohayo Dev.app` usa o bundle ID `io.github.hayashirafael.Ohayo.dev`,
+`~/Library/Application Support/Ohayo Dev`, um lock de instância e um domínio de
+preferências separados. Atualizações no app e Iniciar com o Mac ficam
+indisponíveis nesse canal. O desenvolvimento começa sem copiar contas,
+agendamentos, histórico ou preferências do app de produção.
 
 ### Atualizações
 
@@ -176,8 +200,9 @@ quatro seções:
     customizações do Claude; a UI deixa claro que isso amplia o contexto e não
     é sandbox de filesystem
 - **Histórico** — disparos recentes em cards com status, ícone do provedor,
-  modelo, apelido/e-mail da conta, comando, resposta e detalhes de erro;
-  filtrável por conta do mesmo jeito que Agendamentos
+  modelo, apelido/e-mail da conta, comando, resposta Markdown formatada, link
+  para o arquivo salvo e detalhes de erro; filtrável por conta do mesmo jeito
+  que Agendamentos
 - **Geral** — Iniciar com o Mac, tempo restante na barra de menus, detalhes
   sensíveis nas notificações (desligados por padrão), quantos próximos Disparos
   o painel mostra (1–5), Idioma, acesso ao sistema, a versão do app e **Buscar
@@ -198,8 +223,9 @@ Se notificações ou automação do Terminal forem negadas, altere-as em **Ajust
 do Sistema → Notificações → Ohayo** ou **Ajustes do Sistema → Privacidade e
 Segurança → Automação** e reabra o guia para atualizar ou testar a integração.
 
-Ao salvar um agendamento com **Confiar nesta pasta para Claude/Codex** marcado,
-o Ohayo verifica o acesso imediatamente. Para uma pasta protegida pelo macOS,
+Ao salvar um Agendamento Claude com **Confiar nesta pasta para o Claude**
+ligado, ou um Agendamento Codex em **Acesso total** ou **Escrita na pasta**, o
+Ohayo verifica o acesso imediatamente. Para uma pasta protegida pelo macOS,
 como Documents, escolha **Permitir** no diálogo do sistema. Um Ohayo assinado
 com Developer ID mantém essa autorização entre atualizações; um rebuild local
 ou de teste ad-hoc tem outra identidade de código e o macOS pode perguntar de
@@ -242,31 +268,46 @@ como execução concluída: o Ohayo não observa o exit status final da sessão.
 Agendamento interativo em Horários Fixos ainda abre no horário agendado mesmo
 com janela ativa. Sem diretório de trabalho, disparos de provider interativos e
 batch usam `~/Library/Application Support/Ohayo/workspace` em vez da sua pasta
-pessoal. O script temporário privado usa modo `0600`, se remove no exit/sinais e
-resíduos antigos de crash são limpos.
+pessoal (ou o equivalente isolado `Ohayo Dev/workspace`). O script temporário
+privado usa modo `0600`, se remove no exit/sinais e resíduos antigos de crash
+são limpos.
 
-Depois de escolher uma pasta de trabalho, **Confiar nesta pasta para
-Claude/Codex** fica marcado por padrão. Salvar solicita imediatamente o acesso
-à pasta e permite que o Codex altere arquivos dentro dela. Em sessões
-interativas, o Ohayo grava o trust básico do Claude para essa pasta ou passa ao
-Codex um override oficial efêmero
-`projects.<path>.trust_level="trusted"`; ele não reescreve o `config.toml` do
-Codex. Desmarcar a opção mantém o Codex somente leitura e deixa visível o
-prompt de trust do próprio provider. Imports externos do `CLAUDE.md` nunca são
-pré-aprovados, então esse consentimento separado continua visível.
+Depois de escolher uma pasta de trabalho, o Ohayo pode solicitar acesso a ela
+ao salvar o Agendamento. O Claude mantém a opção dedicada **Confiar nesta pasta
+para o Claude**, ligada por padrão, que registra apenas o trust básico do
+projeto. O Codex usa um único controle **Acesso** com três modos explícitos:
+**Acesso total** (padrão, sem sandbox nem pedidos de aprovação), **Escrita na
+pasta** (pasta confiada com sandbox `workspace-write`) e **Somente leitura**
+(sem pré-autorizar o trust da pasta). Sessões Codex interativas e confiadas
+recebem um override oficial efêmero
+`projects.<path>.trust_level="trusted"`; o Ohayo nunca reescreve o
+`config.toml`. Imports externos do `CLAUDE.md` nunca são pré-aprovados, então
+esse consentimento separado continua visível.
 
 Os padrões Claude — Haiku, esforço baixo, customizações ignoradas e `1+1` —
-formam um Comando mínimo para a Repetição Contínua. Um Disparo Codex batch
-executa `codex exec [--model <modelo>] --sandbox <workspace-write|read-only>
---skip-git-repo-check --color never [-c
-model_reasoning_effort=<esforço>]`: pastas confiadas usam `workspace-write` e
-um opt-out explícito permanece `read-only`. O prompt também chega por stdin.
-Em **Padrão da conta**, modelo e raciocínio são omitidos para o `config.toml`
-valer. O timeout batch é configurável por agendamento: o padrão é 15 minutos
-para Claude/Codex e 5 minutos para shell; sessões interativas no Terminal não
-são supervisionadas por timeout. A captura é limitada preservando o início e a
-cauda, onde normalmente está o erro.
+formam um Comando mínimo para a Repetição Contínua. O Ohayo lê o
+`models_cache.json` da conta Codex selecionada para oferecer apenas os modelos
+listados e seus esforços de raciocínio compatíveis, com um fallback interno
+atual quando esse cache não estiver disponível. Um Disparo Codex batch executa
+`codex exec [--model <modelo>]` com
+`--dangerously-bypass-approvals-and-sandbox` em **Acesso total**, `--sandbox
+workspace-write` em **Escrita na pasta** ou `--sandbox read-only` em **Somente
+leitura**, seguido de `--skip-git-repo-check --color never` e de um override de
+raciocínio opcional. O mesmo modo de acesso vale para sessões interativas no
+Terminal, e no batch o prompt sempre chega por stdin. Em **Padrão da conta**,
+modelo e raciocínio são omitidos para o `config.toml` valer.
 
+Quando **Mostrar resposta** está ligado num Agendamento Claude/Codex batch, a
+resposta capturada completa é salva atomicamente como Markdown (padrão) ou
+texto simples na pasta selecionada; o padrão é
+`~/Library/Application Support/Ohayo/Responses` (ou o equivalente isolado
+`Ohayo Dev/Responses`). Pastas favoritas ficam salvas localmente para
+reutilização. O Histórico mantém uma prévia limitada, renderiza Markdown e
+oferece um link para o arquivo. O timeout batch é configurável por agendamento:
+o padrão é 15 minutos para Claude/Codex e 5 minutos para shell; sessões
+interativas no Terminal não são supervisionadas por timeout. A captura do
+processo é limitada preservando o início e a cauda, onde normalmente está o
+erro.
 Só uma instância do Ohayo roda por vez. Dentro dela, disparos formam uma fila
 FIFO por provider/conta em vez de serem descartados por um lock global; contas
 diferentes podem avançar em paralelo. Falhas transitórias usam backoff

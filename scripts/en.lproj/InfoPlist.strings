@@ -1,2 +1,2 @@
 "NSAppleEventsUsageDescription" = "Ohayo uses Terminal to open the Claude Code and Codex sessions you start.";
-"NSDocumentsFolderUsageDescription" = "Ohayo accesses only folders you select for scheduled Claude Code and Codex tasks.";
+"NSDocumentsFolderUsageDescription" = "Ohayo accesses only folders you select for scheduled Claude Code and Codex schedules.";

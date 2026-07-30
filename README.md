@@ -25,8 +25,10 @@ app updates.
   evidence exists, unless you turn that behavior off) or **Fixed times**
   (times × weekdays). Managed in the **Schedules** section
 - **Configurable commands** — a Claude prompt (model, effort, safe-mode,
-  working directory), a Codex prompt (model, reasoning effort, working
-  directory), or any shell command — embedded directly in the schedule.
+  working directory), a Codex prompt (models and reasoning efforts discovered
+  from the selected account, full access by default with folder-write and
+  read-only alternatives, working directory), or any shell command — embedded
+  directly in the schedule.
   Claude/Codex prompts open in Terminal.app by default so you can keep
   interacting in the same session; turn that off to run them in batch mode
 - **Multi-account, Claude and Codex** — the default dirs (`~/.claude`,
@@ -34,9 +36,12 @@ app updates.
   dirs are detected once, on first launch, and from then on you add accounts
   anytime via "Add account…" — shows the logged-in email, supports custom
   aliases
-- **History** — recent runs with status and expandable response (the
-  captured stdout/stderr log on failures), including a distinct **Launched**
-  state for interactive Terminal sessions; clear it at any time
+- **History and response files** — recent runs with status and expandable
+  response (Markdown is rendered when selected, while failure stdout/stderr
+  remains available), including a distinct **Launched** state for interactive
+  Terminal sessions. Batch Claude/Codex responses can be saved as `.md`
+  (default) or `.txt` in a chosen folder, with favorite folders available for
+  reuse
 - **Private notifications by default** — macOS notifications hide prompt,
   response, error and account details unless you explicitly enable them in
   **General**
@@ -102,6 +107,27 @@ swift test            # test suite
 ./scripts/make-dmg.sh # build/Ohayo-<version>.dmg (needs `brew install create-dmg`)
 open build/Ohayo.app
 ```
+
+For an isolated local build that can run alongside the DMG-installed app:
+
+```bash
+./scripts/make-dev-app.sh
+open "build/Ohayo Dev.app"
+orca computer get-app-state --app io.github.hayashirafael.Ohayo.dev --json
+```
+
+If Computer Use cannot inspect the menu bar surface directly, expose the
+central app window in the development channel with:
+
+```bash
+open "build/Ohayo Dev.app" --args --ui-testing
+```
+
+`Ohayo Dev.app` uses the `io.github.hayashirafael.Ohayo.dev` bundle identifier,
+`~/Library/Application Support/Ohayo Dev`, a separate single-instance lock and
+preferences domain. In-app updates and Launch at Login are unavailable in this
+channel. Development starts without copying accounts, schedules, history or
+preferences from the production app.
 
 ### Updates
 
@@ -169,8 +195,8 @@ sections:
     a skill loads Claude customizations; the UI makes clear that this expands
     context and is not a filesystem sandbox
 - **History** — recent runs as cards with status, provider icon, model,
-  account alias/email, command, response and error details; filterable by
-  account the same way as Schedules
+  account alias/email, command, rendered Markdown response, saved-file link
+  and error details; filterable by account the same way as Schedules
 - **General** — Launch at Login, time remaining in the menu bar, sensitive
   notification details (off by default), how many upcoming runs the menu panel
   shows (1–5), Language (English or Portuguese), system access, the app
@@ -191,12 +217,13 @@ If notifications or Terminal automation were denied, change them in **System
 Settings → Notifications → Ohayo** or **System Settings → Privacy & Security →
 Automation**, then reopen the guide to refresh or test the integration.
 
-When you save a schedule with **Trust this folder for Claude/Codex** enabled,
-Ohayo checks access immediately. For a folder protected by macOS, such as
-Documents, choose **Allow** in the system prompt. A Developer ID-signed Ohayo
-keeps that authorization across updates; an ad-hoc local/test rebuild has a
-different code identity and macOS may ask again. The app cannot click or grant
-this privacy permission on your behalf.
+When you save a Claude schedule with **Trust this folder for Claude** enabled,
+or a Codex schedule using **Full access** or **Folder write**, Ohayo checks
+access immediately. For a folder protected by macOS, such as Documents, choose
+**Allow** in the system prompt. A Developer ID-signed Ohayo keeps that
+authorization across updates; an ad-hoc local/test rebuild has a different
+code identity and macOS may ask again. The app cannot click or grant this
+privacy permission on your behalf.
 
 ## How it works
 
@@ -235,30 +262,44 @@ not as a completed run: Ohayo cannot observe that session's final exit status.
 A fixed-time interactive schedule still opens at its scheduled time when an
 account has an active window. With no working directory, interactive and batch
 provider runs use `~/Library/Application Support/Ohayo/workspace` instead of
-your home directory. The private temporary launch script is mode `0600`,
-removes itself on exit/signals, and stale crash residues are cleaned up.
+your home directory (or the isolated `Ohayo Dev/workspace` equivalent). The
+private temporary launch script is mode `0600`, removes itself on exit/signals,
+and stale crash residues are cleaned up.
 
-After you choose a working directory, **Trust this folder for Claude/Codex** is
-enabled by default. Saving requests folder access immediately and lets Codex
-change files inside that workspace. For interactive sessions, Ohayo then
-records basic Claude project trust for that directory or passes Codex an
-ephemeral official
-`projects.<path>.trust_level="trusted"` override; it does not rewrite Codex's
-`config.toml`. Turning the option off keeps Codex read-only and leaves the
-provider's own trust prompt visible. External `CLAUDE.md` imports are never
-pre-approved, so their separate consent remains visible.
+After you choose a working directory, Ohayo can request folder access when the
+schedule is saved. Claude keeps a dedicated **Trust this folder for Claude**
+option, enabled by default, which records only basic project trust. Codex uses
+one **Access** control with three explicit modes: **Full access** (default,
+without sandbox or approval prompts), **Folder write** (trusted folder with a
+`workspace-write` sandbox), and **Read-only** (no pre-authorized folder trust).
+Interactive trusted Codex sessions receive an ephemeral official
+`projects.<path>.trust_level="trusted"` override; Ohayo never rewrites
+`config.toml`. External `CLAUDE.md` imports are never pre-approved, so their
+separate consent remains visible.
 
 The built-in Claude defaults — Haiku, low effort, ignored customizations and
-`1+1` — provide a minimal command for Continuous Repetition. A batch Codex run
-launches `codex exec [--model <model>] --sandbox <workspace-write|read-only>
---skip-git-repo-check --color never [-c
-model_reasoning_effort=<effort>]`: trusted folders use `workspace-write`, while
-an explicit trust opt-out stays `read-only`. Its prompt also comes from stdin.
-When model or reasoning is set to **Account default**, Ohayo omits the flag
-so `config.toml` wins. Batch timeouts are configurable per schedule: the
-defaults are 15 minutes for Claude/Codex and 5 minutes for shell, while
-interactive Terminal sessions are not supervised by a timeout. Captured output
-is bounded while preserving both its beginning and error-bearing tail.
+`1+1` — provide a minimal command for Continuous Repetition. Ohayo reads the
+selected Codex account's `models_cache.json` to offer only listed models and
+their supported reasoning efforts, with a current built-in fallback when that
+cache is unavailable. A batch Codex run launches `codex exec [--model <model>]`
+with `--dangerously-bypass-approvals-and-sandbox` for **Full access**,
+`--sandbox workspace-write` for **Folder write**, or `--sandbox read-only` for
+**Read-only**, followed by `--skip-git-repo-check --color never` and an optional
+reasoning override. The same access mode applies to interactive Terminal
+sessions, and the batch prompt always comes from stdin. When model or reasoning
+is set to **Account default**, Ohayo omits the corresponding flag so
+`config.toml` wins.
+
+When **Show response** is enabled for a batch Claude/Codex schedule, the full
+captured response is saved atomically as Markdown (default) or plain text in
+the selected folder; the default is
+`~/Library/Application Support/Ohayo/Responses` (or the isolated
+`Ohayo Dev/Responses` equivalent). Favorite folders are stored locally for
+reuse. History keeps a bounded preview, renders Markdown, and links to the
+saved file. Batch timeouts are configurable per schedule: the defaults are 15
+minutes for Claude/Codex and 5 minutes for shell, while interactive Terminal
+sessions are not supervised by a timeout. Captured process output is bounded
+while preserving both its beginning and error-bearing tail.
 
 Only one Ohayo instance runs at a time. Within it, runs are FIFO per
 provider/account instead of being silently discarded by one global lock;

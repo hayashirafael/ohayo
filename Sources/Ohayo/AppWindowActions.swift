@@ -3,6 +3,13 @@ import AppKit
 /// Coordena a transição do painel transitório da barra para uma janela normal.
 @MainActor
 enum AppWindowActions {
+    static func shouldExposeMainWindowForUITesting(
+        profile: AppRuntimeProfile,
+        arguments: [String]
+    ) -> Bool {
+        profile == .development && arguments.contains("--ui-testing")
+    }
+
     static func closeMenuBarPanel() {
         NSApp.windows.first {
             $0.className.contains("MenuBarExtraWindow")
