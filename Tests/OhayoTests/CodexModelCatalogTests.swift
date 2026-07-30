@@ -106,4 +106,20 @@ final class CodexModelCatalogTests: XCTestCase {
             [.low, .medium, .high, .xhigh, .max]
         )
     }
+
+    func testFallbackRespeitaIdiomaAtualDoApp() {
+        let portuguese = L10n(language: .portuguese)
+
+        XCTAssertEqual(
+            CodexModelCatalog.models(
+                from: Data("inválido".utf8),
+                strings: portuguese
+            ).map(\.description),
+            [
+                "Modelo agente de programação de última geração.",
+                "Modelo agente de programação equilibrado para o trabalho cotidiano.",
+                "Modelo rápido para tarefas claras e repetíveis.",
+            ]
+        )
+    }
 }

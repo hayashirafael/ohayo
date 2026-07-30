@@ -92,6 +92,13 @@ struct AgendamentoDraft: Equatable {
         outputMode != .terminal
     }
 
+    static func supportsResponseFile(
+        kind: Message.Kind,
+        outputMode: AgendamentoOutputMode
+    ) -> Bool {
+        kind != .shell && outputMode == .response
+    }
+
     static func effectiveNotifyOnSuccess(
         _ requested: Bool,
         outputMode: AgendamentoOutputMode
@@ -136,6 +143,10 @@ struct AgendamentoDraft: Equatable {
         let trimmedResponseDirectory = responseDirectory.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
+        let savesResponseFile = Self.supportsResponseFile(
+            kind: kind,
+            outputMode: outputMode
+        )
         let command = Message(
             text: trimmedText,
             kind: kind,
@@ -165,9 +176,9 @@ struct AgendamentoDraft: Equatable {
             codexReasoning: kind == .codex ? codexReasoning : nil,
             codexAllowFullAccess: kind == .codex && !codexAllowFullAccess
                 ? false : nil,
-            responseFileFormat: outputMode == .response
+            responseFileFormat: savesResponseFile
                 ? responseFormat : nil,
-            responseDirectory: outputMode == .response
+            responseDirectory: savesResponseFile
                 && !trimmedResponseDirectory.isEmpty
                 ? trimmedResponseDirectory : nil,
             skill: kind != .shell && skill?.isEmpty == false ? skill : nil

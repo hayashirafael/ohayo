@@ -430,6 +430,12 @@ struct L10n {
             pt: "Executa em segundo plano, salva um arquivo e mantém a resposta no Histórico."
         )
     }
+    var showShellResponseDescription: String {
+        text(
+            en: "Runs in background and keeps the output in History.",
+            pt: "Executa em segundo plano e mantém a saída no Histórico."
+        )
+    }
     var runInTerminalDescription: String {
         text(
             en: "Opens an interactive session you can follow in Terminal.",
@@ -478,6 +484,33 @@ struct L10n {
     }
     var plainTextFile: String {
         text(en: "Plain text (.txt)", pt: "Texto simples (.txt)")
+    }
+    var markdownFile: String {
+        text(en: "Markdown (.md)", pt: "Markdown (.md)")
+    }
+    var responseFileDefaultName: String {
+        text(en: "response", pt: "resposta")
+    }
+    func codexFallbackModelDescription(_ slug: String) -> String {
+        switch slug {
+        case "gpt-5.6-sol":
+            return text(
+                en: "Latest frontier agentic coding model.",
+                pt: "Modelo agente de programação de última geração."
+            )
+        case "gpt-5.6-terra":
+            return text(
+                en: "Balanced agentic coding model for everyday work.",
+                pt: "Modelo agente de programação equilibrado para o trabalho cotidiano."
+            )
+        case "gpt-5.6-luna":
+            return text(
+                en: "Fast model for clear, repeatable work.",
+                pt: "Modelo rápido para tarefas claras e repetíveis."
+            )
+        default:
+            return ""
+        }
     }
     var chooseResponseDirectory: String {
         text(

@@ -13,41 +13,27 @@ struct CodexModelOption: Equatable, Identifiable {
 enum CodexModelCatalog {
     /// Fallback publicado pelo produto Codex. O cache de cada conta continua
     /// sendo a fonte preferida porque disponibilidade e efforts podem variar.
-    static let fallbackModels = [
-        CodexModelOption(
-            slug: "gpt-5.6-sol",
-            displayName: "GPT-5.6 Sol",
-            description: "Latest frontier agentic coding model.",
-            supportedReasoning: [.low, .medium, .high, .xhigh, .max, .ultra],
-            defaultReasoning: .medium
-        ),
-        CodexModelOption(
-            slug: "gpt-5.6-terra",
-            displayName: "GPT-5.6 Terra",
-            description: "Balanced agentic coding model for everyday work.",
-            supportedReasoning: [.low, .medium, .high, .xhigh, .max, .ultra],
-            defaultReasoning: .medium
-        ),
-        CodexModelOption(
-            slug: "gpt-5.6-luna",
-            displayName: "GPT-5.6 Luna",
-            description: "Fast model for clear, repeatable work.",
-            supportedReasoning: [.low, .medium, .high, .xhigh, .max],
-            defaultReasoning: .medium
-        ),
-    ]
-
-    static func load(from configDirectory: URL) -> [CodexModelOption] {
-        let cache = configDirectory.appendingPathComponent("models_cache.json")
-        guard let data = try? Data(contentsOf: cache) else {
-            return fallbackModels
-        }
-        return models(from: data)
+    static var fallbackModels: [CodexModelOption] {
+        localizedFallbackModels(strings: L10n(language: .english))
     }
 
-    static func models(from data: Data) -> [CodexModelOption] {
+    static func load(
+        from configDirectory: URL,
+        strings: L10n = L10n(language: .english)
+    ) -> [CodexModelOption] {
+        let cache = configDirectory.appendingPathComponent("models_cache.json")
+        guard let data = try? Data(contentsOf: cache) else {
+            return localizedFallbackModels(strings: strings)
+        }
+        return models(from: data, strings: strings)
+    }
+
+    static func models(
+        from data: Data,
+        strings: L10n = L10n(language: .english)
+    ) -> [CodexModelOption] {
         guard let cache = try? JSONDecoder().decode(Cache.self, from: data) else {
-            return fallbackModels
+            return localizedFallbackModels(strings: strings)
         }
         let visible = cache.models.compactMap { model -> CodexModelOption? in
             guard model.visibility == "list",
@@ -67,7 +53,9 @@ enum CodexModelCatalog {
                 )
             )
         }
-        return visible.isEmpty ? fallbackModels : visible
+        return visible.isEmpty
+            ? localizedFallbackModels(strings: strings)
+            : visible
     }
 
     static func normalizedReasoning(
@@ -86,6 +74,34 @@ enum CodexModelCatalog {
             return nil
         }
         return defaultReasoning
+    }
+
+    private static func localizedFallbackModels(
+        strings: L10n
+    ) -> [CodexModelOption] {
+        [
+            CodexModelOption(
+                slug: "gpt-5.6-sol",
+                displayName: "GPT-5.6 Sol",
+                description: strings.codexFallbackModelDescription("gpt-5.6-sol"),
+                supportedReasoning: [.low, .medium, .high, .xhigh, .max, .ultra],
+                defaultReasoning: .medium
+            ),
+            CodexModelOption(
+                slug: "gpt-5.6-terra",
+                displayName: "GPT-5.6 Terra",
+                description: strings.codexFallbackModelDescription("gpt-5.6-terra"),
+                supportedReasoning: [.low, .medium, .high, .xhigh, .max, .ultra],
+                defaultReasoning: .medium
+            ),
+            CodexModelOption(
+                slug: "gpt-5.6-luna",
+                displayName: "GPT-5.6 Luna",
+                description: strings.codexFallbackModelDescription("gpt-5.6-luna"),
+                supportedReasoning: [.low, .medium, .high, .xhigh, .max],
+                defaultReasoning: .medium
+            ),
+        ]
     }
 
     private struct Cache: Decodable {

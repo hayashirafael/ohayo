@@ -53,7 +53,8 @@ account.
   Full access is on by default for new Codex schedules and can be explicitly
   disabled to use a read-only sandbox. A provider Message that shows its
   response also stores `.md` (default) or `.txt` output in the selected folder
-  (default `~/Documents/Ohayo`).
+  (default `~/Library/Application Support/Ohayo/Responses`, isolated as
+  `Ohayo Dev/Responses` in the development profile).
   Claude/Codex default to an interactive Terminal hand-off; `runInTerminal:
   false` is batch. Batch timeout is configurable (`timeoutSeconds`), defaulting
   to 900s for providers and 300s for shell; Terminal is unsupervised and has no

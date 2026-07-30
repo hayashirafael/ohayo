@@ -46,7 +46,10 @@ struct AgendamentoFormSheet: View {
             homeDirectory: state.dispatchHomeDirectory
         )
         _codexModels = State(
-            initialValue: CodexModelCatalog.load(from: codexDirectory)
+            initialValue: CodexModelCatalog.load(
+                from: codexDirectory,
+                strings: state.strings
+            )
         )
         _showingAdvancedOptions = State(
             initialValue: Self.hasAdvancedConfiguration(restored)
@@ -278,7 +281,10 @@ struct AgendamentoFormSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if draft.outputMode == .response {
+            if AgendamentoDraft.supportsResponseFile(
+                kind: draft.kind,
+                outputMode: draft.outputMode
+            ) {
                 responseFileConfiguration
             }
 
@@ -307,7 +313,7 @@ struct AgendamentoFormSheet: View {
                 Text(strings.responseFileFormat)
                     .foregroundStyle(.secondary)
                 Picker("", selection: $draft.responseFormat) {
-                    Text("Markdown (.md)")
+                    Text(strings.markdownFile)
                         .tag(ResponseFileFormat.markdown)
                     Text(strings.plainTextFile)
                         .tag(ResponseFileFormat.plainText)
@@ -408,7 +414,10 @@ struct AgendamentoFormSheet: View {
         switch draft.outputMode {
         case .none: return strings.runInBackgroundDescription
         case .terminal: return strings.runInTerminalDescription
-        case .response: return strings.showResponseDescription
+        case .response:
+            return draft.kind == .shell
+                ? strings.showShellResponseDescription
+                : strings.showResponseDescription
         }
     }
 
@@ -697,7 +706,10 @@ struct AgendamentoFormSheet: View {
             for: .codex,
             homeDirectory: state.dispatchHomeDirectory
         )
-        let models = CodexModelCatalog.load(from: directory)
+        let models = CodexModelCatalog.load(
+            from: directory,
+            strings: state.strings
+        )
         codexModels = models
         draft.codexReasoning = CodexModelCatalog.normalizedReasoning(
             draft.codexReasoning,
@@ -732,7 +744,10 @@ struct AgendamentoFormSheet: View {
     private func commit() {
         switch editor.apply(.save(draft)) {
         case .success:
-            if draft.outputMode == .response {
+            if AgendamentoDraft.supportsResponseFile(
+                kind: draft.kind,
+                outputMode: draft.outputMode
+            ) {
                 state.setResponseDirectoryFavorite(
                     URL(
                         fileURLWithPath: draft.responseDirectory,

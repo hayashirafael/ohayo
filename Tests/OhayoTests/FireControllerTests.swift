@@ -81,6 +81,7 @@ final class MockResponseFileWriter: ResponseFileWriting {
         let format: ResponseFileFormat
         let directory: URL
         let taskName: String?
+        let fallbackName: String
         let date: Date
     }
 
@@ -94,6 +95,7 @@ final class MockResponseFileWriter: ResponseFileWriting {
         format: ResponseFileFormat,
         directory: URL,
         taskName: String?,
+        fallbackName: String,
         date: Date
     ) async -> Result<URL, ResponseFileWriteError> {
         calls.append(Call(
@@ -101,6 +103,7 @@ final class MockResponseFileWriter: ResponseFileWriting {
             format: format,
             directory: directory,
             taskName: taskName,
+            fallbackName: fallbackName,
             date: date
         ))
         return result
@@ -875,6 +878,25 @@ final class FireControllerTests: XCTestCase {
             date: now, result: .success, message: msg, origin: .scheduled))
     }
 
+    func testRespostaShellPermaneceNoHistoricoSemExportarArquivo() async {
+        runner.result = .success("saída local")
+        let message = Message(
+            text: "echo local",
+            kind: .shell,
+            showResponse: true,
+            responseFileFormat: .plainText,
+            responseDirectory: "/tmp"
+        )
+
+        await controller.fire(message: message, origin: .scheduled)
+
+        XCTAssertEqual(state.lastEvent?.response, "saída local")
+        XCTAssertNil(state.lastEvent?.responseFileFormat)
+        XCTAssertNil(state.lastEvent?.responseFilePath)
+        XCTAssertNil(state.lastEvent?.responseFileError)
+        XCTAssertTrue(responseFileWriter.calls.isEmpty)
+    }
+
     func testRespostaSalvaENotificadaQuandoLigado() async {
         runner.result = .success("resposta do claude")
         let msg = Message(text: "resumo", kind: .claude, showResponse: true)
@@ -912,6 +934,7 @@ final class FireControllerTests: XCTestCase {
                     isDirectory: true
                 ).standardizedFileURL,
                 taskName: "Relatório diário",
+                fallbackName: "response",
                 date: now
             ),
         ])

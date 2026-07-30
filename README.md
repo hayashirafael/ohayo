@@ -277,13 +277,14 @@ reasoning is set to **Account default**, Ohayo omits the corresponding flag so
 
 When **Show response** is enabled for a batch Claude/Codex schedule, the full
 captured response is saved atomically as Markdown (default) or plain text in
-the selected folder; the default is `~/Documents/Ohayo`. Favorite folders are
-stored locally for reuse. History keeps a bounded preview, renders Markdown,
-and links to the saved file. Batch timeouts are configurable per schedule: the
-defaults are 15 minutes for Claude/Codex and 5 minutes for shell, while
-interactive Terminal sessions are not supervised by a timeout. Captured
-process output is bounded while preserving both its beginning and error-bearing
-tail.
+the selected folder; the default is
+`~/Library/Application Support/Ohayo/Responses` (or the isolated
+`Ohayo Dev/Responses` equivalent). Favorite folders are stored locally for
+reuse. History keeps a bounded preview, renders Markdown, and links to the
+saved file. Batch timeouts are configurable per schedule: the defaults are 15
+minutes for Claude/Codex and 5 minutes for shell, while interactive Terminal
+sessions are not supervised by a timeout. Captured process output is bounded
+while preserving both its beginning and error-bearing tail.
 
 Only one Ohayo instance runs at a time. Within it, runs are FIFO per
 provider/account instead of being silently discarded by one global lock;

@@ -28,8 +28,10 @@ enum AppPaths {
     }
 
     static func responsesDirectory(
+        profile: AppRuntimeProfile = .current,
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
-        home.appendingPathComponent("Documents/Ohayo")
+        supportDirectory(profile: profile, home: home)
+            .appendingPathComponent("Responses")
     }
 }

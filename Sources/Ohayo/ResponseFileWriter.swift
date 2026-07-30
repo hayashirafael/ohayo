@@ -10,6 +10,7 @@ protocol ResponseFileWriting {
         format: ResponseFileFormat,
         directory: URL,
         taskName: String?,
+        fallbackName: String,
         date: Date
     ) async -> Result<URL, ResponseFileWriteError>
 }
@@ -20,6 +21,7 @@ struct SystemResponseFileWriter: ResponseFileWriting {
         format: ResponseFileFormat,
         directory: URL,
         taskName: String?,
+        fallbackName: String,
         date: Date
     ) async -> Result<URL, ResponseFileWriteError> {
         do {
@@ -31,6 +33,7 @@ struct SystemResponseFileWriter: ResponseFileWriting {
             let file = targetDirectory.appendingPathComponent(
                 Self.fileName(
                     taskName: taskName,
+                    fallbackName: fallbackName,
                     date: date,
                     format: format
                 )
@@ -44,6 +47,7 @@ struct SystemResponseFileWriter: ResponseFileWriting {
 
     private static func fileName(
         taskName: String?,
+        fallbackName: String,
         date: Date,
         format: ResponseFileFormat
     ) -> String {
@@ -52,9 +56,10 @@ struct SystemResponseFileWriter: ResponseFileWriting {
         formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let timestamp = formatter.string(from: date)
-        let title = slug(taskName ?? "") ?? "resposta"
+        let title = slug(taskName ?? "") ?? slug(fallbackName)
+        let titleComponent = title.map { "_\($0)" } ?? ""
         let unique = UUID().uuidString.prefix(8).lowercased()
-        return "\(timestamp)_\(title)-\(unique).\(format.fileExtension)"
+        return "\(timestamp)\(titleComponent)-\(unique).\(format.fileExtension)"
     }
 
     private static func slug(_ value: String) -> String? {

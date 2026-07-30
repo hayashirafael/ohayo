@@ -250,16 +250,18 @@ final class FireController {
                 ? String(output.prefix(Self.responseLimit)) : nil
             var responseFilePath: String?
             var responseFileError: String?
-            let responseFileFormat = response.map {
-                _ in message.resolvedResponseFileFormat
-            }
-            if response != nil {
+            let exportsResponseFile =
+                response != nil && message.kind != .shell
+            let responseFileFormat = exportsResponseFile
+                ? message.resolvedResponseFileFormat : nil
+            if exportsResponseFile {
                 let directory = responseDirectory(for: message)
                 switch await responseFileWriter.write(
                     response: output,
                     format: message.resolvedResponseFileFormat,
                     directory: directory,
                     taskName: taskName,
+                    fallbackName: state.strings.responseFileDefaultName,
                     date: clock.now
                 ) {
                 case .success(let file):

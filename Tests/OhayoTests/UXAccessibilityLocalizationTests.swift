@@ -102,4 +102,30 @@ final class UXAccessibilityLocalizationTests: XCTestCase {
             "Buscar atualizações…"
         )
     }
+
+    func testArquivosDeRespostaEModelosFallbackTemCopiasLocalizadas() {
+        let english = L10n(language: .english)
+        XCTAssertEqual(english.markdownFile, "Markdown (.md)")
+        XCTAssertEqual(english.responseFileDefaultName, "response")
+        XCTAssertEqual(
+            english.showShellResponseDescription,
+            "Runs in background and keeps the output in History."
+        )
+        XCTAssertEqual(
+            english.codexFallbackModelDescription("gpt-5.6-sol"),
+            "Latest frontier agentic coding model."
+        )
+
+        let portuguese = L10n(language: .portuguese)
+        XCTAssertEqual(portuguese.markdownFile, "Markdown (.md)")
+        XCTAssertEqual(portuguese.responseFileDefaultName, "resposta")
+        XCTAssertEqual(
+            portuguese.showShellResponseDescription,
+            "Executa em segundo plano e mantém a saída no Histórico."
+        )
+        XCTAssertEqual(
+            portuguese.codexFallbackModelDescription("gpt-5.6-sol"),
+            "Modelo agente de programação de última geração."
+        )
+    }
 }

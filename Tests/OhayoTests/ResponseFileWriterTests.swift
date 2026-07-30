@@ -14,6 +14,7 @@ final class ResponseFileWriterTests: XCTestCase {
             format: .markdown,
             directory: directory,
             taskName: "Revisão final",
+            fallbackName: "resposta",
             date: Date(timeIntervalSince1970: 0)
         ).get()
 
@@ -37,6 +38,7 @@ final class ResponseFileWriterTests: XCTestCase {
             format: .plainText,
             directory: directory,
             taskName: nil,
+            fallbackName: "resposta",
             date: date
         ).get()
         let second = try await writer.write(
@@ -44,10 +46,12 @@ final class ResponseFileWriterTests: XCTestCase {
             format: .plainText,
             directory: directory,
             taskName: nil,
+            fallbackName: "resposta",
             date: date
         ).get()
 
         XCTAssertEqual(first.pathExtension, "txt")
+        XCTAssertTrue(first.lastPathComponent.contains("resposta"))
         XCTAssertNotEqual(first, second)
         XCTAssertEqual(
             try String(contentsOf: first, encoding: .utf8),

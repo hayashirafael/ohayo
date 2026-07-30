@@ -113,6 +113,20 @@ final class AgendamentoEditorTests: XCTestCase {
         XCTAssertTrue(message.resolvedCodexAllowFullAccess)
     }
 
+    func testShellNaoPersisteConfiguracaoDeArquivoDeResposta() {
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "echo local"
+        draft.kind = .shell
+        draft.outputMode = .response
+        draft.responseFormat = .plainText
+        draft.responseDirectory = "/tmp/respostas"
+
+        let message = draft.normalizedTask().resolvedCommand
+
+        XCTAssertNil(message.responseFileFormat)
+        XCTAssertNil(message.responseDirectory)
+    }
+
     func testOptOutDoAcessoTotalCodexPersiste() {
         var draft = AgendamentoDraft(editing: nil)
         draft.text = "somente leia"
