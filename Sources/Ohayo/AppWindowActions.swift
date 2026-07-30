@@ -5,22 +5,45 @@ import AppKit
 @MainActor
 enum AppWindowActions {
     static func openSettings() {
-        NSApp.activate(ignoringOtherApps: true)
-
-        // SwiftUI's Settings scene changed its responder-chain selector name.
-        // Try the current spelling first and retain the macOS 13 fallback.
-        if NSApp.sendAction(
-            Selector(("showSettingsWindow:")),
-            to: nil,
-            from: nil
-        ) {
-            return
-        }
-
-        _ = NSApp.sendAction(
-            Selector(("showPreferencesWindow:")),
-            to: nil,
-            from: nil
+        openSettings(
+            deferToNextRunLoop: { action in
+                DispatchQueue.main.async {
+                    action()
+                }
+            },
+            activate: {
+                NSApp.activate(ignoringOtherApps: true)
+            },
+            sendAction: { selectorName in
+                NSApp.sendAction(
+                    Selector((selectorName)),
+                    to: nil,
+                    from: nil
+                )
+            }
         )
+    }
+
+    static func openSettings(
+        deferToNextRunLoop: (@escaping @MainActor () -> Void) -> Void,
+        activate: @escaping @MainActor () -> Void,
+        sendAction: @escaping @MainActor (String) -> Bool
+    ) {
+        // MenuBarExtra keeps its own transient responder chain while the panel
+        // is open. Defer activation and delivery until the panel closes so
+        // SwiftUI's Settings scene can receive the action instead of silently
+        // dropping it.
+        deferToNextRunLoop {
+            activate()
+
+            // SwiftUI's Settings scene changed its responder-chain selector
+            // name. Try the current spelling first and retain the macOS 13
+            // fallback.
+            if sendAction("showSettingsWindow:") {
+                return
+            }
+
+            _ = sendAction("showPreferencesWindow:")
+        }
     }
 }

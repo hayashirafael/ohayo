@@ -80,10 +80,16 @@ struct MenuPanel: View {
             }
             Spacer()
             Menu {
-                Button {
-                    openSettings()
-                } label: {
-                    Label(strings.settingsShort, systemImage: "gearshape")
+                if #available(macOS 14.0, *) {
+                    NativeAppSettingsButton(closePanel: closePanel) {
+                        Label(strings.settingsShort, systemImage: "gearshape")
+                    }
+                } else {
+                    Button {
+                        openSettingsFallback()
+                    } label: {
+                        Label(strings.settingsShort, systemImage: "gearshape")
+                    }
                 }
                 Button {
                     openPermissions()
@@ -368,23 +374,41 @@ struct MenuPanel: View {
         HStack(spacing: 7) {
             footerButton("checklist", strings.schedules) { open(.horarios, filter: nil) }
             footerButton("clock.arrow.circlepath", strings.history) { open(.historico, filter: nil) }
-            footerButton("gearshape", strings.settingsShort) { openSettings() }
+            settingsFooterButton
         }
         .padding(.top, 3)
         .overlay(alignment: .top) { Divider().offset(y: -3) }
     }
 
+    @ViewBuilder
+    private var settingsFooterButton: some View {
+        if #available(macOS 14.0, *) {
+            NativeAppSettingsButton(closePanel: closePanel) {
+                footerButtonLabel("gearshape", strings.settingsShort)
+            }
+            .buttonStyle(.plain)
+        } else {
+            footerButton("gearshape", strings.settingsShort) {
+                openSettingsFallback()
+            }
+        }
+    }
+
     private func footerButton(_ symbol: String, _ title: String,
                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: symbol)
-                .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-                .frame(maxWidth: .infinity, minHeight: 30)
-                .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
+            footerButtonLabel(symbol, title)
         }
         .buttonStyle(.plain)
+    }
+
+    private func footerButtonLabel(_ symbol: String, _ title: String) -> some View {
+        Label(title, systemImage: symbol)
+            .font(.system(size: 12, weight: .medium))
+            .lineLimit(1)
+            .minimumScaleFactor(0.78)
+            .frame(maxWidth: .infinity, minHeight: 30)
+            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
     }
 
     // MARK: - Navegação
@@ -397,9 +421,9 @@ struct MenuPanel: View {
         closePanel()
     }
 
-    private func openSettings() {
-        AppWindowActions.openSettings()
+    private func openSettingsFallback() {
         closePanel()
+        AppWindowActions.openSettings()
     }
 
     private func openPermissions() {
@@ -412,5 +436,22 @@ struct MenuPanel: View {
     /// janela — fecha a janela do próprio painel explicitamente.
     private func closePanel() {
         NSApp.windows.first { $0.className.contains("MenuBarExtraWindow") }?.close()
+    }
+}
+
+@available(macOS 14.0, *)
+private struct NativeAppSettingsButton<Label: View>: View {
+    @Environment(\.openSettings) private var openSettings
+
+    let closePanel: () -> Void
+    @ViewBuilder let label: () -> Label
+
+    var body: some View {
+        Button {
+            openSettings()
+            closePanel()
+        } label: {
+            label()
+        }
     }
 }
