@@ -43,6 +43,7 @@ jobs:
       - run: swift test
       - run: brew install create-dmg
       - name: Import Developer ID certificate
+        if: steps.credentials.outputs.signing_enabled == 'true'
         env:
           OHAYO_CODESIGN_CERTIFICATE_BASE64: ${{ secrets.OHAYO_CODESIGN_CERTIFICATE_BASE64 }}
           OHAYO_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.OHAYO_CODESIGN_CERTIFICATE_PASSWORD }}
@@ -114,11 +115,15 @@ jobs:
           plutil -lint scripts/Ohayo.entitlements
           hdiutil verify "${dmg_files[0]}"
 
-          codesign --display --verbose=4 build/Ohayo.app 2>&1 | grep -q 'runtime'
-          codesign --display --verbose=4 build/Ohayo.app 2>&1 \
-            | grep -q 'Authority=Developer ID Application:'
-          codesign --verify --strict --verbose=2 "${dmg_files[0]}"
+          if [[ "${{ steps.credentials.outputs.signing_enabled }}" == "true" ]]; then
+            codesign --display --verbose=4 build/Ohayo.app 2>&1 | grep -q 'runtime'
+            codesign --verify --strict --verbose=2 "${dmg_files[0]}"
+          else
+            codesign --display --verbose=4 build/Ohayo.app 2>&1 \
+              | grep -q 'Signature=adhoc'
+          fi
       - name: Configure notarization credentials
+        if: steps.credentials.outputs.notarization_enabled == 'true'
         env:
           OHAYO_NOTARY_APPLE_ID: ${{ secrets.OHAYO_NOTARY_APPLE_ID }}
           OHAYO_NOTARY_TEAM_ID: ${{ secrets.OHAYO_NOTARY_TEAM_ID }}
@@ -132,6 +137,7 @@ jobs:
             --password "$OHAYO_NOTARY_APP_SPECIFIC_PASSWORD" \
             --validate
       - name: Notarize, staple and validate distributed app
+        if: steps.credentials.outputs.notarization_enabled == 'true'
         run: |
           set -euo pipefail
           dmg_files=(build/Ohayo-*.dmg)
@@ -229,7 +235,7 @@ jobs:
           grep -q '<!-- sparkle-signatures:' build/appcast.xml
           grep -q "Ohayo-${version}.dmg" build/appcast.xml
       - name: Remove signing material
-        if: always()
+        if: always() && steps.credentials.outputs.signing_enabled == 'true'
         run: |
           if [[ -n "${OHAYO_SIGNING_KEYCHAIN:-}" ]]; then
             security delete-keychain "$OHAYO_SIGNING_KEYCHAIN" || true

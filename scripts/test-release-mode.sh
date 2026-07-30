@@ -5,13 +5,26 @@ cd "$(dirname "$0")/.."
 MODE_SCRIPT="$PWD/scripts/configure-release-mode.sh"
 TEST_PATH="${PATH:-/usr/bin:/bin}"
 
-if env -i \
+adhoc_output="$(
+    env -i \
+        PATH="$TEST_PATH" \
+        OHAYO_SPARKLE_PRIVATE_KEY="test-only-key" \
+        "$MODE_SCRIPT" 2>/dev/null
+)"
+grep -qx 'distribution_mode=adhoc' <<<"$adhoc_output"
+grep -qx 'signing_enabled=false' <<<"$adhoc_output"
+grep -qx 'notarization_enabled=false' <<<"$adhoc_output"
+
+github_output_path="$(mktemp "${TMPDIR:-/tmp}/ohayo-release-output.XXXXXX")"
+env -i \
     PATH="$TEST_PATH" \
+    GITHUB_OUTPUT="$github_output_path" \
     OHAYO_SPARKLE_PRIVATE_KEY="test-only-key" \
-    "$MODE_SCRIPT" >/dev/null 2>&1; then
-    echo "erro: release pública sem Developer ID/notarização deveria falhar" >&2
-    exit 1
-fi
+    "$MODE_SCRIPT" >/dev/null 2>/dev/null
+grep -qx 'distribution_mode=adhoc' "$github_output_path"
+grep -qx 'signing_enabled=false' "$github_output_path"
+grep -qx 'notarization_enabled=false' "$github_output_path"
+unlink "$github_output_path"
 
 developer_id_output="$(
     env -i \

@@ -92,12 +92,12 @@ arraste o **Ohayo** para **Applications**.
 
 > As releases publicadas desde a v1.2.0 são universais para Apple Silicon e
 > Intel.
-> Builds existentes para testers, assinados ad-hoc, podem perder a autorização
-> de privacidade do macOS após uma atualização porque sua identidade de código
-> não é estável. Novas releases públicas desta revisão ficam bloqueadas sem
-> Developer ID, hardened runtime, notarização e stapling. Builds locais a partir
-> do código continuam ad-hoc e podem pedir acesso a pastas protegidas novamente
-> após cada rebuild.
+> Quando as credenciais Apple não estão disponíveis, releases para testers usam
+> assinatura ad-hoc sem notarização. O Gatekeeper pode exigir aprovação manual
+> na primeira abertura, e o macOS pode pedir acesso a pastas protegidas novamente
+> após uma atualização porque a identidade de código não é estável. Quando todas
+> as credenciais Apple estão configuradas, o mesmo workflow usa Developer ID,
+> hardened runtime, notarização e stapling.
 
 ### A partir do código
 
@@ -141,10 +141,11 @@ consultam diariamente o feed assinado e oferecem **Instalar e reiniciar**
 dentro do app. Use **Ohayo → Geral → Sobre → Buscar atualizações…** para
 verificar imediatamente.
 
-Os arquivos de atualização e o feed são validados criptograficamente por uma
-chave EdDSA separada do Sparkle. O workflow de release agora falha de forma
-fechada sem todas as credenciais de Developer ID, notarização e Sparkle; ele
-publica juntos o DMG notarizado e o `appcast.xml` assinado.
+Os arquivos de atualização e o feed são validados criptograficamente pela chave
+EdDSA separada do Sparkle nos dois modos de distribuição. O workflow de release
+exige a credencial do Sparkle e publica juntos o DMG e o `appcast.xml` assinado;
+as credenciais Apple habilitam adicionalmente a assinatura Developer ID e a
+notarização.
 
 ## Primeiros passos
 

@@ -91,11 +91,12 @@ Download `Ohayo-<version>.dmg` from the
 **Applications**.
 
 > Published releases since v1.2.0 are universal for Apple Silicon and Intel.
-> Existing ad-hoc tester builds can lose macOS privacy authorization after an
-> update because their code identity is not stable. New public releases from
-> this revision are blocked unless they are signed with Developer ID, hardened,
-> notarized, and stapled. Local source builds remain ad-hoc and can therefore
-> ask for protected-folder access again after each rebuild.
+> When Apple credentials are unavailable, tester releases use ad-hoc signing
+> without notarization. Gatekeeper may require manual approval on first launch,
+> and macOS can ask for protected-folder access again after an update because
+> the code identity is not stable. When all Apple credentials are configured,
+> the same workflow uses Developer ID, hardened runtime, notarization, and
+> stapling.
 
 ### From source
 
@@ -138,9 +139,10 @@ feed daily and offer **Install and Relaunch** in-app. Use **Ohayo → General �
 About → Check for Updates…** to check immediately.
 
 Release archives and the feed are cryptographically validated by Sparkle's
-separate EdDSA key. The GitHub release workflow now fails closed unless all
-Developer ID, notarization, and Sparkle credentials are present; it publishes
-the notarized DMG and signed `appcast.xml` together.
+separate EdDSA key in both distribution modes. The GitHub release workflow
+requires the Sparkle credential and publishes the DMG and signed `appcast.xml`
+together; Apple credentials additionally enable Developer ID signing and
+notarization.
 
 ## Quick start
 

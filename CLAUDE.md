@@ -272,14 +272,14 @@ open "build/Ohayo Dev.app" --args --ui-testing # expose central window for Compu
 ./scripts/make-dmg.sh           # build/Ohayo-<version>.dmg
 ```
 
-Public tag releases are fail-closed: all Developer ID, notarization, and
-Sparkle signing secrets are required, tag version must match `Info.plist`, the
-app is signed with hardened runtime and the Apple Events entitlement, and it is
-universal (`arm64` + `x86_64`) with deployment target macOS 13. The DMG is
-verified/mounted, then notarized and stapled; the mounted distributed app must
-pass Gatekeeper and a launch smoke before upload. Local ad-hoc builds remain
-supported but are not Gatekeeper-ready. Set
-`OHAYO_UNIVERSAL_BUILD=1` to reproduce the universal build locally.
+Public tag releases require the Sparkle signing secret and the tag version must
+match `Info.plist`. Without Apple credentials, the workflow produces a
+universal (`arm64` + `x86_64`) ad-hoc tester build that is not notarized or
+Gatekeeper-ready. With the complete Developer ID and notarization credential
+sets, the same workflow signs with hardened runtime and the Apple Events
+entitlement, notarizes and staples the DMG, then validates the mounted app with
+Gatekeeper and a launch smoke. Both modes preserve deployment target macOS 13.
+Set `OHAYO_UNIVERSAL_BUILD=1` to reproduce the universal build locally.
 
 ## Observability
 
