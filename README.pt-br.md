@@ -137,9 +137,11 @@ produção.
 
 A versão 1.2.0 introduziu o atualizador. Instalações ainda sem Sparkle precisam
 de uma última atualização manual via Homebrew/DMG. Releases a partir da v1.2.0
-consultam diariamente o feed assinado e oferecem **Instalar e reiniciar**
-dentro do app. Use **Ohayo → Geral → Sobre → Buscar atualizações…** para
-verificar imediatamente.
+consultam diariamente o feed assinado. Quando uma release está disponível, o
+Ohayo mostra sua versão no painel da barra de menus e em **Geral → Sobre**, com
+o botão **Atualizar agora**, que abre o fluxo **Instalar e reiniciar** do
+Sparkle. Use **Ohayo → Geral → Sobre → Buscar atualizações…** para verificar
+imediatamente.
 
 Os arquivos de atualização e o feed são validados criptograficamente pela chave
 EdDSA separada do Sparkle nos dois modos de distribuição. O workflow de release

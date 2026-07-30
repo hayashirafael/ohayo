@@ -64,6 +64,13 @@ struct GeneralTab: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
+                if let version = updater.availableVersion {
+                    UpdateAvailableNotice(
+                        version: version,
+                        strings: strings,
+                        update: updater.installAvailableUpdate
+                    )
+                }
                 if updater.isSupported {
                     Button {
                         updater.checkForUpdates()

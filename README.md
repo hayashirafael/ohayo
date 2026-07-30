@@ -135,8 +135,10 @@ copying accounts, schedules, history or preferences from the production app.
 
 Version 1.2.0 introduced the updater. Installations without Sparkle need one
 final manual Homebrew/DMG upgrade. Releases from 1.2.0 onward check the signed
-feed daily and offer **Install and Relaunch** in-app. Use **Ohayo → General →
-About → Check for Updates…** to check immediately.
+feed daily. When a release is available, Ohayo shows its version in the menu-bar
+panel and in **General → About**, with an **Update Now** button that opens
+Sparkle's **Install and Relaunch** flow. Use **Ohayo → General → About → Check
+for Updates…** to check immediately.
 
 Release archives and the feed are cryptographically validated by Sparkle's
 separate EdDSA key in both distribution modes. The GitHub release workflow

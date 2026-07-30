@@ -103,6 +103,22 @@ final class UXAccessibilityLocalizationTests: XCTestCase {
         )
     }
 
+    func testAvisoDeNovaAtualizacaoTemVersaoEAcaoNosDoisIdiomas() {
+        let english = L10n(language: .english)
+        XCTAssertEqual(
+            english.updateAvailableTitle(version: "1.3.0"),
+            "Ohayo 1.3.0 is available"
+        )
+        XCTAssertEqual(english.updateNow, "Update Now")
+
+        let portuguese = L10n(language: .portuguese)
+        XCTAssertEqual(
+            portuguese.updateAvailableTitle(version: "1.3.0"),
+            "Ohayo 1.3.0 está disponível"
+        )
+        XCTAssertEqual(portuguese.updateNow, "Atualizar agora")
+    }
+
     func testDiretorioPadraoDaInterfaceEhOWorkspaceDoOhayo() {
         XCTAssertEqual(
             L10n(language: .english).workingDirectoryDefault,

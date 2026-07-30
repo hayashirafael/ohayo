@@ -85,6 +85,15 @@ struct L10n {
     var checkForUpdates: String {
         text(en: "Check for Updates…", pt: "Buscar atualizações…")
     }
+    func updateAvailableTitle(version: String) -> String {
+        text(
+            en: "Ohayo \(version) is available",
+            pt: "Ohayo \(version) está disponível"
+        )
+    }
+    var updateNow: String {
+        text(en: "Update Now", pt: "Atualizar agora")
+    }
     var permissionGuideTitle: String { text(en: "Set Up Ohayo", pt: "Configurar o Ohayo") }
     var permissionGuideIntro: String {
         text(en: "Choose which system integrations you want to configure now.",

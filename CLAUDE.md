@@ -251,7 +251,10 @@ This is a single-context repository with `CONTEXT.md` and ADRs under `docs/adr/`
   `accountFilter`, renders Markdown responses, links to saved response files,
   distinguishes Terminal `.launched`, and clears all local history behind a
   destructive confirmation), `GeneralTab` (including the
-  default-off sensitive-notification-details toggle). The first-run
+  default-off sensitive-notification-details toggle). `AppUpdater` observes
+  Sparkle through `SparkleUpdateChecker`, publishes the available version, and
+  drives the shared `UpdateAvailableNotice` shown in both `MenuPanel` and
+  `GeneralTab`; the development profile never creates this updater. The first-run
   `PermissionSetupView` embeds the passive Provider Doctor before the macOS
   permission controls. `NSDocumentsFolderUsageDescription` is localized in the
   packaged app, but macOS requests protected-folder access on first real use;

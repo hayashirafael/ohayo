@@ -6,6 +6,7 @@ import SwiftUI
 /// Clique num agendamento abre Ohayo › Agendamentos filtrado pela conta dele.
 struct MenuPanel: View {
     @ObservedObject var state: AppState
+    @ObservedObject var updater: AppUpdater
     @Environment(\.openWindow) private var openWindow
     @State private var hovered: UUID?
     private var strings: L10n { state.strings }
@@ -35,6 +36,13 @@ struct MenuPanel: View {
     var body: some View {
         VStack(spacing: 7) {
             header
+            if let version = updater.availableVersion {
+                UpdateAvailableNotice(
+                    version: version,
+                    strings: strings,
+                    update: updater.installAvailableUpdate
+                )
+            }
             content
             footer
         }

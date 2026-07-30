@@ -39,7 +39,7 @@ struct OhayoApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuPanel(state: env.state)
+            MenuPanel(state: env.state, updater: updater)
         } label: {
             MenuBarLabel(state: env.state)
                 .background {
