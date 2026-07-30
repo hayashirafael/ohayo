@@ -8,8 +8,17 @@ protocol LoginItemManaging {
 }
 
 struct SystemLoginItemManager: LoginItemManaging {
-    var isSupported: Bool { Bundle.main.bundleIdentifier != nil }
-    var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+    let profile: AppRuntimeProfile
+
+    init(profile: AppRuntimeProfile = .current) {
+        self.profile = profile
+    }
+
+    var isSupported: Bool { profile.supportsLoginItem }
+    var isEnabled: Bool {
+        guard isSupported else { return false }
+        return SMAppService.mainApp.status == .enabled
+    }
 
     func setEnabled(_ enabled: Bool) {
         guard isSupported else { return }

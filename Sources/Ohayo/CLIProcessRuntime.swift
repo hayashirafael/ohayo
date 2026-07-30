@@ -253,7 +253,7 @@ struct SystemCLIProcessRuntime: CLIProcessRunning {
                 process.standardError = pipe
             }
             pipe.fileHandleForReading.readabilityHandler = { handle in
-                capture.append(handle.availableData)
+                capture.readAvailableData(from: handle)
             }
             return pipe
         }
@@ -266,34 +266,7 @@ struct SystemCLIProcessRuntime: CLIProcessRunning {
 
     private func drain(_ pipe: Pipe?, into capture: OutputCapture) {
         guard let pipe else { return }
-        let handle = pipe.fileHandleForReading
-        defer { try? handle.close() }
-
-        let descriptor = handle.fileDescriptor
-        let flags = fcntl(descriptor, F_GETFL)
-        guard flags >= 0,
-              fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
-            return
-        }
-
-        var buffer = [UInt8](repeating: 0, count: 8 * 1024)
-        while true {
-            let count = buffer.withUnsafeMutableBytes { bytes in
-                Darwin.read(
-                    descriptor,
-                    bytes.baseAddress,
-                    bytes.count
-                )
-            }
-            if count > 0 {
-                capture.append(Data(buffer.prefix(count)))
-            } else if count == -1, errno == EINTR {
-                continue
-            } else {
-                // EOF ou EAGAIN: tudo que estava disponível foi capturado.
-                return
-            }
-        }
+        capture.drainAvailableData(from: pipe.fileHandleForReading)
     }
 
     private func result(
@@ -504,6 +477,7 @@ private final class OutputCapture: @unchecked Sendable {
     private var tail = Data()
     private var truncated = false
     private var overflowReported = false
+    private var isClosed = false
 
     init(
         policy: CLIProcessOutputPolicy,
@@ -513,10 +487,60 @@ private final class OutputCapture: @unchecked Sendable {
         self.onOverflow = onOverflow
     }
 
-    func append(_ chunk: Data) {
-        guard !chunk.isEmpty else { return }
+    func readAvailableData(from handle: FileHandle) {
+        lock.lock()
+        guard !isClosed else {
+            lock.unlock()
+            return
+        }
+        let chunk = handle.availableData
+        let reportOverflow =
+            chunk.isEmpty ? false : appendLocked(chunk)
+        lock.unlock()
+        if reportOverflow { onOverflow() }
+    }
+
+    func drainAvailableData(from handle: FileHandle) {
         var reportOverflow = false
         lock.lock()
+        defer {
+            isClosed = true
+            try? handle.close()
+            lock.unlock()
+            if reportOverflow { onOverflow() }
+        }
+
+        let descriptor = handle.fileDescriptor
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0,
+              fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+            return
+        }
+
+        var buffer = [UInt8](repeating: 0, count: 8 * 1024)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { bytes in
+                Darwin.read(
+                    descriptor,
+                    bytes.baseAddress,
+                    bytes.count
+                )
+            }
+            if count > 0 {
+                reportOverflow =
+                    appendLocked(Data(buffer.prefix(count)))
+                    || reportOverflow
+            } else if count == -1, errno == EINTR {
+                continue
+            } else {
+                // EOF ou EAGAIN: tudo que estava disponível foi capturado.
+                return
+            }
+        }
+    }
+
+    private func appendLocked(_ chunk: Data) -> Bool {
+        var reportOverflow = false
         switch policy {
         case .discard:
             break
@@ -539,8 +563,7 @@ private final class OutputCapture: @unchecked Sendable {
                 appendTruncating(chunk, limit: limit)
             }
         }
-        lock.unlock()
-        if reportOverflow { onOverflow() }
+        return reportOverflow
     }
 
     func snapshot() -> CapturedCLIOutput {
