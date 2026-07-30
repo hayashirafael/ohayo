@@ -31,7 +31,7 @@ final class AppEnvironment: ObservableObject {
          taskScheduler: TaskScheduler? = nil,
          detector: SessionDetecting = SessionDetector(),
          terminalLauncher: TerminalLaunching = TerminalLauncher(),
-         runner: CommandRunning = CommandRunner(),
+         runner: CommandRunning = CommandRunner.live(),
          notifier: Notifying = SystemNotifier(),
          authenticationChecker: AuthenticationChecking = CLIAuthenticationChecker(),
          probeCLIs: Bool = true) {

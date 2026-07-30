@@ -25,6 +25,17 @@ protocol CommandRunning {
 struct CommandRunner: CommandRunning {
     static let maximumCapturedOutputBytes = 256 * 1024
 
+    static func live() -> CommandRunner {
+        CommandRunner(
+            trustSeeder: { accountDirectory, workingDirectory in
+                TerminalLauncher.seedTrust(
+                    accountDir: accountDirectory,
+                    workingDir: workingDirectory
+                )
+            }
+        )
+    }
+
     /// Override injetável para testes/integrações. Sem ele, cada execução
     /// deriva o limite batch da própria mensagem.
     private let timeoutOverride: TimeInterval?
@@ -32,6 +43,7 @@ struct CommandRunner: CommandRunning {
     var shellOverride: URL? // testes
     private let defaultProviderWorkingDirectory: URL
     private let directoryCreator: (URL) throws -> Void
+    private let trustSeeder: (String, String) -> Void
     private let processRuntime: any CLIProcessRunning
 
     init(
@@ -46,6 +58,9 @@ struct CommandRunner: CommandRunning {
                 withIntermediateDirectories: true
             )
         },
+        // O composition root usa `live()`. O default inerte mantém testes e
+        // integrações livres de escrita em credenciais reais.
+        trustSeeder: @escaping (String, String) -> Void = { _, _ in },
         processRuntime: any CLIProcessRunning =
             SystemCLIProcessRuntime()
     ) {
@@ -55,6 +70,7 @@ struct CommandRunner: CommandRunning {
         self.defaultProviderWorkingDirectory =
             defaultProviderWorkingDirectory
         self.directoryCreator = directoryCreator
+        self.trustSeeder = trustSeeder
         self.processRuntime = processRuntime
     }
 
@@ -180,7 +196,7 @@ struct CommandRunner: CommandRunning {
         case .shell(let preparedWorkingDirectory):
             workingDirectory =
                 preparedWorkingDirectory ?? defaultShellWorkingDirectory
-        case .provider:
+        case .provider(let plan):
             if let wd = message.workingDir,
                !wd.trimmingCharacters(in: .whitespaces).isEmpty {
                 workingDirectory = URL(
@@ -194,6 +210,13 @@ struct CommandRunner: CommandRunning {
                 } catch {
                     return .failure(.failed(error.localizedDescription))
                 }
+            }
+            if plan.account.provider == .claude,
+               message.resolvedTrustWorkingDirectory {
+                trustSeeder(
+                    plan.account.configDirectory.path,
+                    workingDirectory.path
+                )
             }
         }
 

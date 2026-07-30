@@ -145,6 +145,70 @@ final class CommandRunnerTests: XCTestCase {
         XCTAssertEqual(createdDirectories, [workspace])
     }
 
+    func testClaudeBatchPreAutorizaProjetoConfiavelAntesDoProcesso() async {
+        let accountDirectory = URL(
+            fileURLWithPath: "/tmp/conta-claude-confiavel",
+            isDirectory: true
+        )
+        let workingDirectory = URL(
+            fileURLWithPath: "/tmp/projeto-claude-confiavel",
+            isDirectory: true
+        )
+        var seededAccount: String?
+        var seededWorkingDirectory: String?
+        var trustWasSeededBeforeProcess = false
+        let runtime = CapturingCommandRuntime {
+            trustWasSeededBeforeProcess =
+                seededAccount != nil && seededWorkingDirectory != nil
+        }
+        let runner = CommandRunner(
+            timeout: 5,
+            binaryOverride: URL(fileURLWithPath: "/tmp/fake-claude"),
+            trustSeeder: { account, workingDirectory in
+                seededAccount = account
+                seededWorkingDirectory = workingDirectory
+            },
+            processRuntime: runtime
+        )
+        let message = Message(
+            text: "revise o projeto",
+            kind: .claude,
+            configDir: accountDirectory.path,
+            workingDir: workingDirectory.path,
+            trustWorkingDirectory: true,
+            runInTerminal: false
+        )
+
+        let result = await runner.run(dispatch(message))
+
+        XCTAssertEqual(result, .success(""))
+        XCTAssertTrue(trustWasSeededBeforeProcess)
+        XCTAssertEqual(seededAccount, accountDirectory.path)
+        XCTAssertEqual(seededWorkingDirectory, workingDirectory.path)
+    }
+
+    func testClaudeBatchRespeitaOptOutDoTrustDoProjeto() async {
+        var seedCount = 0
+        let runner = CommandRunner(
+            timeout: 5,
+            binaryOverride: URL(fileURLWithPath: "/tmp/fake-claude"),
+            trustSeeder: { _, _ in seedCount += 1 },
+            processRuntime: CapturingCommandRuntime()
+        )
+        let message = Message(
+            text: "revise sem confiar",
+            kind: .claude,
+            workingDir: "/tmp/projeto-claude-sem-trust",
+            trustWorkingDirectory: false,
+            runInTerminal: false
+        )
+
+        let result = await runner.run(dispatch(message))
+
+        XCTAssertEqual(result, .success(""))
+        XCTAssertEqual(seedCount, 0)
+    }
+
     func testShellUsaWorkingDirectoryDoDispatchPreparado() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("prepared-wd-\(UUID().uuidString)")
@@ -949,8 +1013,14 @@ final class CommandRunnerTests: XCTestCase {
 
 private final class CapturingCommandRuntime: CLIProcessRunning {
     private(set) var requests: [CLIProcessRequest] = []
+    private let beforeRun: () -> Void
+
+    init(beforeRun: @escaping () -> Void = {}) {
+        self.beforeRun = beforeRun
+    }
 
     func run(_ request: CLIProcessRequest) async -> CLIProcessResult {
+        beforeRun()
         requests.append(request)
         return CLIProcessResult(
             termination: .exited(0),

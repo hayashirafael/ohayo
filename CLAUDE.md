@@ -162,7 +162,11 @@ This is a single-context repository with `CONTEXT.md` and ADRs under `docs/adr/`
   `ProviderAccountContext` applies the correct native/custom environment.
   Provider batch runs without an explicit working directory use
   `AppPaths.workspaceDirectory()` for the active profile instead of the home;
-  shell keeps its historical home default. Timeouts come from the command,
+  shell keeps its historical home default. `AppEnvironment` composes
+  `CommandRunner.live()`, which reuses `TerminalLauncher.seedTrust` before a
+  trusted Claude batch reaches the subprocess; direct test initializers keep
+  that credential-writing collaborator inert unless explicitly injected.
+  Timeouts come from the command,
   output is capped as UTF-8-safe head + tail, and timeout termination targets
   only positive PIDs observed in the process tree (SIGTERM then best-effort
   SIGKILL).
