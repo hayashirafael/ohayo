@@ -103,6 +103,27 @@ swift test            # test suite
 open build/Ohayo.app
 ```
 
+For an isolated local build that can run alongside the DMG-installed app:
+
+```bash
+./scripts/make-dev-app.sh
+open "build/Ohayo Dev.app"
+orca computer get-app-state --app io.github.hayashirafael.Ohayo.dev --json
+```
+
+If Computer Use cannot inspect the menu bar surface directly, expose the
+normal Settings window in the development channel with:
+
+```bash
+open "build/Ohayo Dev.app" --args --ui-testing
+```
+
+`Ohayo Dev.app` uses the `io.github.hayashirafael.Ohayo.dev` bundle identifier,
+`~/Library/Application Support/Ohayo Dev`, a separate single-instance lock and
+preferences domain. In-app updates and Launch at Login are unavailable in this
+channel. Development starts without copying accounts, schedules, history or
+preferences from the production app.
+
 ### Updates
 
 Version 1.2.0 is the updater bootstrap. Existing installations without Sparkle

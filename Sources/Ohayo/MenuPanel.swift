@@ -51,7 +51,7 @@ struct MenuPanel: View {
         HStack(spacing: 8) {
             if state.missingCLIs.isEmpty {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Ohayo")
+                    Text(AppRuntimeProfile.current.displayName)
                         .font(.headline)
                     if panelHasProblem {
                         Button(action: openHealthDetails) {
@@ -119,7 +119,7 @@ struct MenuPanel: View {
         if let missing = state.missingCLIs.first {
             return strings.installCLIWarning(missing)
         }
-        return "Ohayo"
+        return AppRuntimeProfile.current.displayName
     }
 
     private var panelHasProblem: Bool {

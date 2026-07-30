@@ -3,6 +3,21 @@ import XCTest
 
 @MainActor
 final class AppWindowActionsTests: XCTestCase {
+    func testUITestingArgumentOpensSettingsOnlyInDevelopment() {
+        XCTAssertTrue(AppWindowActions.shouldOpenSettingsForUITesting(
+            profile: .development,
+            arguments: ["Ohayo", "--ui-testing"]
+        ))
+        XCTAssertFalse(AppWindowActions.shouldOpenSettingsForUITesting(
+            profile: .production,
+            arguments: ["Ohayo", "--ui-testing"]
+        ))
+        XCTAssertFalse(AppWindowActions.shouldOpenSettingsForUITesting(
+            profile: .development,
+            arguments: ["Ohayo"]
+        ))
+    }
+
     func testOpenSettingsDefersResponderActionUntilNextRunLoop() {
         var events: [String] = []
         var deferredAction: (@MainActor () -> Void)?

@@ -4,6 +4,13 @@ import AppKit
 /// deployment target.
 @MainActor
 enum AppWindowActions {
+    static func shouldOpenSettingsForUITesting(
+        profile: AppRuntimeProfile,
+        arguments: [String]
+    ) -> Bool {
+        profile == .development && arguments.contains("--ui-testing")
+    }
+
     static func openSettings() {
         openSettings(
             deferToNextRunLoop: { action in

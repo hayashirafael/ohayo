@@ -770,7 +770,7 @@ final class AppState: ObservableObject {
         return result
     }
 
-    init(defaults: UserDefaults = .standard,
+    init(defaults: UserDefaults = AppRuntimeProfile.defaultUserDefaults(),
          home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.defaults = defaults
         self.homeDirectory = home.standardizedFileURL

@@ -2,6 +2,32 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+CHANNEL="production"
+if [[ $# -gt 0 ]]; then
+    if [[ $# -ne 2 || "$1" != "--channel" ]]; then
+        echo "uso: $0 [--channel production|development]" >&2
+        exit 1
+    fi
+    CHANNEL="$2"
+fi
+
+case "$CHANNEL" in
+    production)
+        APP_NAME="Ohayo"
+        BUNDLE_IDENTIFIER="io.github.hayashirafael.Ohayo"
+        EXECUTABLE_NAME="Ohayo"
+        ;;
+    development)
+        APP_NAME="Ohayo Dev"
+        BUNDLE_IDENTIFIER="io.github.hayashirafael.Ohayo.dev"
+        EXECUTABLE_NAME="Ohayo Dev"
+        ;;
+    *)
+        echo "erro: canal inválido: $CHANNEL" >&2
+        exit 1
+        ;;
+esac
+
 UNIVERSAL_BINARY=""
 cleanup() {
     if [[ -n "$UNIVERSAL_BINARY" ]]; then
@@ -76,13 +102,33 @@ else
     BINARY_SOURCE="$UNIVERSAL_BINARY"
 fi
 
-APP="build/Ohayo.app"
+APP="build/$APP_NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
 mkdir -p "$APP/Contents/Frameworks"
-cp "$BINARY_SOURCE" "$APP/Contents/MacOS/Ohayo"
+cp "$BINARY_SOURCE" "$APP/Contents/MacOS/$EXECUTABLE_NAME"
 cp scripts/Info.plist "$APP/Contents/Info.plist"
+if [[ "$CHANNEL" == "development" ]]; then
+    plutil -replace CFBundleIdentifier -string "$BUNDLE_IDENTIFIER" \
+        "$APP/Contents/Info.plist"
+    plutil -replace CFBundleName -string "$APP_NAME" \
+        "$APP/Contents/Info.plist"
+    plutil -replace CFBundleDisplayName -string "$APP_NAME" \
+        "$APP/Contents/Info.plist"
+    plutil -replace CFBundleExecutable -string "$EXECUTABLE_NAME" \
+        "$APP/Contents/Info.plist"
+    for sparkle_key in \
+        SUFeedURL \
+        SUPublicEDKey \
+        SUEnableAutomaticChecks \
+        SUAutomaticallyUpdate \
+        SUVerifyUpdateBeforeExtraction \
+        SURequireSignedFeed; do
+        plutil -remove "$sparkle_key" "$APP/Contents/Info.plist"
+    done
+fi
+plutil -lint "$APP/Contents/Info.plist" >/dev/null
 for localization in scripts/*.lproj; do
     [[ -d "$localization" ]] || continue
     cp -R "$localization" "$APP/Contents/Resources/"

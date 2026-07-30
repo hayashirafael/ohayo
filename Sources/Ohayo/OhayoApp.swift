@@ -4,19 +4,29 @@ import SwiftUI
 @main
 struct OhayoApp: App {
     @StateObject private var env = AppEnvironment()
-    @StateObject private var updater = AppUpdater()
+    @StateObject private var updater: AppUpdater
 
     /// Vive pelo processo inteiro: o kernel solta o flock quando ele morre.
-    private static let instanceLock = SingleInstanceLock()
+    private static let runtimeProfile = AppRuntimeProfile.current
+    private static let instanceLock = SingleInstanceLock(profile: runtimeProfile)
 
     init() {
+        let exposesUITestingWindow =
+            AppWindowActions.shouldOpenSettingsForUITesting(
+                profile: Self.runtimeProfile,
+                arguments: ProcessInfo.processInfo.arguments
+            )
+        _updater = StateObject(
+            wrappedValue: AppUpdater(profile: Self.runtimeProfile)
+        )
         // Duas instâncias sobre o mesmo UserDefaults = disparos duplicados e
         // histórico sobrescrito. A recém-aberta avisa e sai; o `@StateObject`
         // é preguiçoso, então o AppEnvironment (timers/engines) nem chega a
         // existir neste caminho.
         if !Self.instanceLock.acquire() {
             let language = AppLanguage(
-                rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .english
+                rawValue: AppRuntimeProfile.defaultUserDefaults()
+                    .string(forKey: "language") ?? "") ?? .english
             let strings = L10n(language: language)
             let alert = NSAlert()
             alert.messageText = strings.alreadyRunningTitle
@@ -24,7 +34,12 @@ struct OhayoApp: App {
             alert.runModal()
             exit(0)
         }
-        NSApplication.shared.setActivationPolicy(.accessory)
+        NSApplication.shared.setActivationPolicy(
+            exposesUITestingWindow ? .regular : .accessory
+        )
+        if exposesUITestingWindow {
+            AppWindowActions.openSettings()
+        }
     }
 
     var body: some Scene {
@@ -41,7 +56,7 @@ struct OhayoApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Ohayo", id: "schedule") {
+        Window(Self.runtimeProfile.displayName, id: "schedule") {
             SettingsView(state: env.state, env: env)
         }
         .defaultSize(width: 820, height: 600)
