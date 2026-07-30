@@ -24,35 +24,36 @@ account.
   pauses, aliases, queues, schedulers, cooldowns or conflict checks. Launching
   the app does not rewrite legacy task payloads merely to canonicalize them;
   the form normalizes their account selection when edited.
-- **Window** — the plan's 5-hour usage block. Inferred passively from local
+- **Usage Window / Janela de uso** — the plan's 5-hour usage block. Inferred passively from local
   transcripts. Evidence is fail-closed: Claude requires a non-synthetic,
   non-error assistant event with positive token usage; Codex requires a
   `token_count` event with positive `last_token_usage`. Auth/model/network
   errors and zero-token events do not open a fictional window.
-- **Agendamento** (`ScheduledTask`) — the single unified concept: a command
+- **Schedule / Agendamento** (`ScheduledTask`) — the single unified concept: a command
   dispatched either **continuously** or on **fixed times**. Carries an embedded
   prompt (`command: Message`), an optional name, an `enabled` toggle, and a
   `repetition`:
   - `continuous` — arms at the end of the detected window and chains 5h windows
     24/7; driven by `RenewalEngine`, keyed by the account the command targets.
-    New tasks persist `bootstrapWhenInactive` from an explicit UI choice;
-    missing values identify legacy tasks and resolve fail-closed to `false`.
+    New tasks default `bootstrapWhenInactive` to `true`; missing values identify
+    legacy continuous tasks and also resolve to `true`. A persisted explicit
+    `false` is the opt-out and must remain false.
     Max one continuous agendamento per account (`AppState.hasContinuousConflict`).
   - `fixed` — fixed times × weekdays (`AgendaMath`), driven by `TaskScheduler`,
     with a single catch-up on wake.
   There is no `AppState.renewals` dict and no command library any more.
-- **hi** — the dispatch that opens/renews a window.
-- **Message** — the embedded content of an agendamento: a Claude prompt
+- **Run / Disparo** — a traceable execution occurrence.
+- **Command / Comando** (`Message`) — the embedded content of a Schedule: a Claude prompt
   (configurable model, effort, safe-mode, working dir), a Codex prompt
-  (account-aware model catalog, supported reasoning effort, full-access
+  (account-aware model catalog, supported reasoning effort, three-state access
   policy, working dir), or a raw shell command.
   Default message: `1+1` · Haiku · low effort · safe-mode (uid `…0001`,
   `AppState.defaultMessage`); Codex has its own minimal default
   (`AppState.defaultCodexMessage`, uid `…0002`). Codex with no explicit model
   omits `--model` (and reasoning) so the account's `config.toml` default wins.
-  Full access is on by default for new Codex schedules and can be explicitly
-  disabled to use a read-only sandbox. A provider Message that shows its
-  response also stores `.md` (default) or `.txt` output in the selected folder
+  Full access is on by default for new Codex Schedules; the other explicit
+  modes are trusted-folder `workspace-write` and `read-only`. A provider
+  Command that shows its response also stores `.md` (default) or `.txt` output in the selected folder
   (default `~/Library/Application Support/Ohayo/Responses`, isolated as
   `Ohayo Dev/Responses` in the development profile).
   Claude/Codex default to an interactive Terminal hand-off; `runInTerminal:
@@ -106,14 +107,15 @@ account.
   CLIs/login.
 - `RenewalEngine.swift` — accounts with a continuous agendamento; per-account
   timers armed at the detected window end. When no valid window exists, it
-  bootstraps only with explicit consent. A delivered attempt creates a
-  persisted five-hour cooldown across restarts; a scheduled hand-off keeps its
-  recovery independently from bootstrap consent, and real transcript evidence
-  replaces either timer. Transient failures retry with bounded exponential
-  backoff measured from the returned failure and a fresh transcript check.
-  `needsAttention` blocks without a periodic alert/cooldown until evidence
-  appears or the executable task payload changes. Consent is revalidated
-  immediately before and after the async dispatch.
+  bootstraps by default unless the task has an explicit persisted opt-out. A
+  delivered attempt creates a persisted five-hour cooldown across restarts; a
+  scheduled hand-off keeps its recovery independently from the automatic-start
+  policy, and real transcript evidence replaces either timer. Transient
+  failures retry with bounded exponential backoff measured from the returned
+  failure and a fresh transcript check. `needsAttention` blocks without a
+  periodic alert/cooldown until evidence appears or the executable task payload
+  changes. The automatic-start policy is revalidated immediately before and
+  after the async dispatch.
 - `SessionDetector.swift` — typed window state from transcripts:
   `active(until:)`, conclusively `inactive`, or fail-closed
   `unavailable(reason:)`. Production callers pass the persisted/request
@@ -137,30 +139,36 @@ account.
   `models_cache.json`, exposes only `list` models and their supported reasoning
   efforts, and fails closed to a current Sol/Terra/Luna fallback catalog.
 - `CommandRunner.swift` — subprocess: `claude -p --model … --effort …
-  [--safe-mode]`, or `codex exec [--model …]
-  --dangerously-bypass-approvals-and-sandbox … [-c
-  model_reasoning_effort=…]` by default; explicit full-access opt-out replaces
-  that flag with `--sandbox read-only` (model/reasoning flags omitted when
-  unset → account default). Claude/Codex prompts come from stdin, not argv;
-  shell remains `-l -c`. `ProviderAccountContext` applies the correct
-  native/custom environment. Timeouts come from the message, output is capped
-  as UTF-8-safe head + tail, and timeout termination targets only positive PIDs
-  observed in the process tree (SIGTERM then best-effort SIGKILL).
+  [--safe-mode]`, `codex exec [--model …]` with
+  `--dangerously-bypass-approvals-and-sandbox` (full access),
+  `--sandbox workspace-write` (folder write), or `--sandbox read-only`,
+  followed by `--skip-git-repo-check --color never` and optional reasoning.
+  Model/reasoning flags are omitted when unset so the account default applies.
+  Claude/Codex prompts come from stdin, not argv; shell remains `-l -c`.
+  `ProviderAccountContext` applies the correct native/custom environment.
+  Provider batch runs without an explicit working directory use
+  `AppPaths.workspaceDirectory()` for the active profile instead of the home;
+  shell keeps its historical home default. Timeouts come from the command,
+  output is capped as UTF-8-safe head + tail, and timeout termination targets
+  only positive PIDs observed in the process tree (SIGTERM then best-effort
+  SIGKILL).
 - `ResponseFileWriter.swift` — creates the selected output folder and writes
   complete provider responses atomically to unique `.md`/`.txt` files.
 - `TerminalLauncher.swift` — disparo interativo (`message.resolvedRunInTerminal`):
   abre uma sessão no Terminal.app via AppleScript rodando um `.sh` temporário
   privado (0600, traps de auto-`rm`, limpeza de resíduos antigos); aplica o
   contexto de conta correto e faz `cd` para o working dir
-  (default `~/Library/Application Support/Ohayo/workspace` — nunca o home, cujo
-  trust não persiste). `seedTrust` pré-grava apenas esse workspace controlado
-  pelo Ohayo em `projects[<dir>]` no `.claude.json`, somente com
-  `hasTrustDialogAccepted`; diretórios escolhidos/importados ficam intactos e
-  deixam o Claude controlar o prompt de trust no Terminal quando necessário.
-  Nunca pré-aprova imports externos de `CLAUDE.md`; esse consentimento também
-  permanece visível. Usa o
-  mesmo `resolvedPromptText` do batch; só Claude toca no `.claude.json`, Codex
-  nunca.
+  (default `~/Library/Application Support/{Ohayo|Ohayo Dev}/workspace` — nunca
+  o home, cujo trust não persiste). `seedTrust` grava
+  `hasTrustDialogAccepted` em
+  `projects[<dir>]` no `.claude.json` para o workspace ou diretório cujo
+  `trustWorkingDirectory` efetivo esteja ativo, preservando o restante do
+  arquivo. Ao salvar, `AgendamentoEditor` tenta ler a pasta explícita para
+  disparar antecipadamente o consentimento TCC do macOS. Codex recebe somente
+  nesta invocação `-c projects."<dir>".trust_level="trusted"` quando esse
+  consentimento está ativo, e o `config.toml` permanece intacto. Nunca
+  pré-aprova imports externos de `CLAUDE.md`; esse consentimento também
+  permanece visível. Usa o mesmo `resolvedPromptText` do batch.
 - `AgendaMath.swift` — pure functions for the fixed cycle (times × weekdays):
   `nextOccurrence`, `lastMissedOccurrence` (single catch-up on wake), and
   `date(bySettingMinutes:ofDay:calendar:)`.
@@ -225,7 +233,11 @@ account.
   destructive confirmation), `GeneralTab` (including the
   default-off sensitive-notification-details toggle). The first-run
   `PermissionSetupView` embeds the passive Provider Doctor before the macOS
-  permission controls.
+  permission controls. `NSDocumentsFolderUsageDescription` is localized in the
+  packaged app, but macOS requests protected-folder access on first real use;
+  PermissionSetup cannot grant it. A stable Developer ID identity preserves
+  that TCC decision across releases, while ad-hoc local rebuilds may prompt
+  again.
 
 ## Commands
 
@@ -240,10 +252,10 @@ open "build/Ohayo Dev.app" --args --ui-testing # expose central window for Compu
 ./scripts/make-dmg.sh           # build/Ohayo-<version>.dmg
 ```
 
-Public tag releases are fail-closed: all Developer ID + notary secrets are
-required, tag version must match `Info.plist`, the app is signed with hardened
-runtime and the Apple Events entitlement, and the app is universal
-(`arm64` + `x86_64`) with deployment target macOS 13. The DMG is
+Public tag releases are fail-closed: all Developer ID, notarization, and
+Sparkle signing secrets are required, tag version must match `Info.plist`, the
+app is signed with hardened runtime and the Apple Events entitlement, and it is
+universal (`arm64` + `x86_64`) with deployment target macOS 13. The DMG is
 verified/mounted, then notarized and stapled; the mounted distributed app must
 pass Gatekeeper and a launch smoke before upload. Local ad-hoc builds remain
 supported but are not Gatekeeper-ready. Set

@@ -22,12 +22,37 @@ final class UpdateConfigurationTests: XCTestCase {
         XCTAssertNotNil(Int(buildVersion))
     }
 
+    func testDocumentsAccessPromptExplainsScheduledFolderUseInBothLanguages()
+        throws {
+        let info = try repositoryInfoPlist()
+        let fallback = try XCTUnwrap(
+            info["NSDocumentsFolderUsageDescription"] as? String
+        )
+        XCTAssertTrue(fallback.contains("folders you select"))
+
+        let scripts = repositoryScriptsDirectory()
+        let english = try String(
+            contentsOf: scripts
+                .appendingPathComponent("en.lproj/InfoPlist.strings"),
+            encoding: .utf8
+        )
+        let portuguese = try String(
+            contentsOf: scripts
+                .appendingPathComponent("pt-BR.lproj/InfoPlist.strings"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(english.contains(
+            #""NSDocumentsFolderUsageDescription""#
+        ))
+        XCTAssertTrue(portuguese.contains(
+            #""NSDocumentsFolderUsageDescription""#
+        ))
+        XCTAssertTrue(portuguese.contains("pastas que você escolher"))
+    }
+
     private func repositoryInfoPlist() throws -> [String: Any] {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("scripts/Info.plist")
+        let url = repositoryScriptsDirectory()
+            .appendingPathComponent("Info.plist")
         let data = try Data(contentsOf: url)
         return try XCTUnwrap(
             PropertyListSerialization.propertyList(
@@ -35,5 +60,13 @@ final class UpdateConfigurationTests: XCTestCase {
                 format: nil
             ) as? [String: Any]
         )
+    }
+
+    private func repositoryScriptsDirectory() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("scripts", isDirectory: true)
     }
 }

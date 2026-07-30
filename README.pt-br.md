@@ -21,16 +21,16 @@ consulta separadamente o GitHub para buscar atualizações assinadas do app.
 
 - **Agendamentos unificados** — um único conceito para tudo que é agendado.
   Cada agendamento carrega um comando embutido e uma repetição: **Contínua**
-  (encadeia janelas de 5h, com opt-in explícito antes de iniciar sem evidência
-  de janela ativa) ou **Horários fixos** (horários × dias da semana). Tudo na
-  seção **Agendamentos**
+  (encadeia janelas de 5h e inicia automaticamente sem evidência de janela
+  ativa, a menos que você desligue esse comportamento) ou **Horários fixos**
+  (horários × dias da semana). Tudo na seção **Agendamentos**
 - **Comandos configuráveis** — um prompt do Claude (modelo, esforço,
   safe-mode, pasta de trabalho), um prompt do Codex (modelos e esforços de
-  raciocínio descobertos na conta selecionada, acesso total ao filesystem
-  ligado por padrão, pasta de trabalho), ou qualquer comando shell — embutido
-  direto no agendamento. Prompts Claude/Codex abrem no Terminal.app por padrão,
-  para você continuar interagindo na mesma sessão; se desligar essa opção,
-  rodam em modo batch
+  raciocínio descobertos na conta selecionada, acesso total por padrão com
+  alternativas de escrita na pasta e somente leitura, pasta de trabalho), ou
+  qualquer comando shell — embutido direto no agendamento. Prompts
+  Claude/Codex abrem no Terminal.app por padrão, para você continuar
+  interagindo na mesma sessão; se desligar essa opção, rodam em modo batch
 - **Multi-conta, Claude e Codex** — as pastas padrão (`~/.claude`, `~/.codex`)
   são detectadas automaticamente quando existem; outras pastas `~/.claude*`
   entram uma única vez, na primeira abertura, e daí em diante novas contas são
@@ -91,12 +91,13 @@ Baixe o `Ohayo-<versão>.dmg` da [última release](../../releases/latest) e
 arraste o **Ohayo** para **Applications**.
 
 > As releases publicadas desde a v1.2.0 são universais para Apple Silicon e
-> Intel. A distribuição gratuita atual para testers é assinada ad-hoc e não
-> notarizada. Na primeira abertura, o Gatekeeper pode exigir clicar com o botão
-> direito no app e escolher **Abrir** ou usar **Ajustes do Sistema → Privacidade
-> e Segurança → Abrir Assim Mesmo**. Quando todas as credenciais Apple forem
-> configuradas, o mesmo workflow passa automaticamente a usar Developer ID,
-> hardened runtime, notarização e stapling.
+> Intel.
+> Builds existentes para testers, assinados ad-hoc, podem perder a autorização
+> de privacidade do macOS após uma atualização porque sua identidade de código
+> não é estável. Novas releases públicas desta revisão ficam bloqueadas sem
+> Developer ID, hardened runtime, notarização e stapling. Builds locais a partir
+> do código continuam ad-hoc e podem pedir acesso a pastas protegidas novamente
+> após cada rebuild.
 
 ### A partir do código
 
@@ -138,11 +139,10 @@ consultam diariamente o feed assinado e oferecem **Instalar e reiniciar**
 dentro do app. Use **Ohayo → Geral → Sobre → Buscar atualizações…** para
 verificar imediatamente.
 
-Mesmo no modo gratuito para testers, os arquivos de atualização e o feed são
-validados criptograficamente por uma chave EdDSA separada do Sparkle. Developer
-ID e notarização da Apple ficam intencionalmente para depois; até lá, a primeira
-instalação não tem a confiança do Gatekeeper. O workflow de release publica
-juntos o DMG final e seu `appcast.xml` assinado.
+Os arquivos de atualização e o feed são validados criptograficamente por uma
+chave EdDSA separada do Sparkle. O workflow de release agora falha de forma
+fechada sem todas as credenciais de Developer ID, notarização e Sparkle; ele
+publica juntos o DMG notarizado e o `appcast.xml` assinado.
 
 ## Primeiros passos
 
@@ -223,6 +223,14 @@ Se notificações ou automação do Terminal forem negadas, altere-as em **Ajust
 do Sistema → Notificações → Ohayo** ou **Ajustes do Sistema → Privacidade e
 Segurança → Automação** e reabra o guia para atualizar ou testar a integração.
 
+Ao salvar um Agendamento Claude com **Confiar nesta pasta para o Claude**
+ligado, ou um Agendamento Codex em **Acesso total** ou **Escrita na pasta**, o
+Ohayo verifica o acesso imediatamente. Para uma pasta protegida pelo macOS,
+como Documents, escolha **Permitir** no diálogo do sistema. Um Ohayo assinado
+com Developer ID mantém essa autorização entre atualizações; um rebuild local
+ou de teste ad-hoc tem outra identidade de código e o macOS pode perguntar de
+novo. O app não pode clicar nem conceder essa permissão de privacidade por você.
+
 ## Como funciona
 
 Para manter as Repetições Contínuas, o Ohayo lê os transcripts locais da
@@ -258,27 +266,36 @@ Por padrão, Claude/Codex abrem no Terminal.app sem `-p` / `exec`, deixando a
 sessão interativa aberta. Abrir o Terminal é registrado como **Iniciado**, não
 como execução concluída: o Ohayo não observa o exit status final da sessão. Um
 Agendamento interativo em Horários Fixos ainda abre no horário agendado mesmo
-com janela ativa.
-Sem diretório de trabalho, abre em
-`~/Library/Application Support/Ohayo/workspace`. O script temporário privado
-usa modo `0600`, se remove no exit/sinais e resíduos antigos de crash são
-limpos. O Ohayo semeia o trust básico do projeto Claude apenas nesse workspace
-controlado pelo app. Um diretório de trabalho escolhido ou importado pela pessoa
-nunca é pré-confiado pelo Ohayo, deixando o Claude exibir seu prompt normal de
-trust no Terminal quando necessário. Imports externos do `CLAUDE.md` também
-nunca são pré-aprovados; esse consentimento continua visível.
+com janela ativa. Sem diretório de trabalho, disparos de provider interativos e
+batch usam `~/Library/Application Support/Ohayo/workspace` em vez da sua pasta
+pessoal (ou o equivalente isolado `Ohayo Dev/workspace`). O script temporário
+privado usa modo `0600`, se remove no exit/sinais e resíduos antigos de crash
+são limpos.
+
+Depois de escolher uma pasta de trabalho, o Ohayo pode solicitar acesso a ela
+ao salvar o Agendamento. O Claude mantém a opção dedicada **Confiar nesta pasta
+para o Claude**, ligada por padrão, que registra apenas o trust básico do
+projeto. O Codex usa um único controle **Acesso** com três modos explícitos:
+**Acesso total** (padrão, sem sandbox nem pedidos de aprovação), **Escrita na
+pasta** (pasta confiada com sandbox `workspace-write`) e **Somente leitura**
+(sem pré-autorizar o trust da pasta). Sessões Codex interativas e confiadas
+recebem um override oficial efêmero
+`projects.<path>.trust_level="trusted"`; o Ohayo nunca reescreve o
+`config.toml`. Imports externos do `CLAUDE.md` nunca são pré-aprovados, então
+esse consentimento separado continua visível.
 
 Os padrões Claude — Haiku, esforço baixo, customizações ignoradas e `1+1` —
 formam um Comando mínimo para a Repetição Contínua. O Ohayo lê o
 `models_cache.json` da conta Codex selecionada para oferecer apenas os modelos
 listados e seus esforços de raciocínio compatíveis, com um fallback interno
-atual quando esse cache não estiver disponível. Por padrão, um Disparo Codex
-batch executa `codex exec [--model <modelo>]
---dangerously-bypass-approvals-and-sandbox [-c
-model_reasoning_effort=<esforço>]`; ao desligar **Permitir acesso total**, usa
-`--sandbox read-only`. A mesma escolha vale para sessões interativas no
-Terminal, e o prompt sempre chega por stdin. Em **Padrão da conta**, modelo e
-raciocínio são omitidos para o `config.toml` valer.
+atual quando esse cache não estiver disponível. Um Disparo Codex batch executa
+`codex exec [--model <modelo>]` com
+`--dangerously-bypass-approvals-and-sandbox` em **Acesso total**, `--sandbox
+workspace-write` em **Escrita na pasta** ou `--sandbox read-only` em **Somente
+leitura**, seguido de `--skip-git-repo-check --color never` e de um override de
+raciocínio opcional. O mesmo modo de acesso vale para sessões interativas no
+Terminal, e no batch o prompt sempre chega por stdin. Em **Padrão da conta**,
+modelo e raciocínio são omitidos para o `config.toml` valer.
 
 Quando **Mostrar resposta** está ligado num Agendamento Claude/Codex batch, a
 resposta capturada completa é salva atomicamente como Markdown (padrão) ou
@@ -291,7 +308,6 @@ o padrão é 15 minutos para Claude/Codex e 5 minutos para shell; sessões
 interativas no Terminal não são supervisionadas por timeout. A captura do
 processo é limitada preservando o início e a cauda, onde normalmente está o
 erro.
-
 Só uma instância do Ohayo roda por vez. Dentro dela, disparos formam uma fila
 FIFO por provider/conta em vez de serem descartados por um lock global; contas
 diferentes podem avançar em paralelo. Falhas transitórias usam backoff
@@ -308,24 +324,24 @@ Pastas de conta existentes usam o caminho canônico do filesystem como
 identidade. Cadastrar ou selecionar um symlink para a mesma conta Claude/Codex
 não cria outra fila, Agendamento, pausa nem cooldown de cota.
 
-Um novo agendamento **Contínuo** aguarda quando não existe evidência de janela
-ativa, a menos que você habilite explicitamente **Tentar iniciar quando não
-houver janela ativa**. O formulário avisa que o comando pode consumir cota do
-provedor e que uma sessão interativa no Terminal ainda pode exigir sua
-confirmação. Depois de uma tentativa de bootstrap entregue, o Ohayo espera até
-cinco horas antes de tentar outra vez para esse agendamento, inclusive após
-reiniciar o app; se uma janela real aparecer antes, seu transcript substitui o
-cooldown. Falhas transitórias conhecidas mantêm o retry exponencial mais curto.
+Um novo agendamento **Contínuo** tenta iniciar automaticamente quando não existe
+evidência de janela ativa. Esse também é o padrão de compatibilidade para
+agendamentos contínuos criados por versões anteriores do Ohayo. Desligue
+**Tentar iniciar quando não houver janela ativa** para mantê-lo aguardando. O
+formulário avisa que o comando pode consumir cota do provedor. Depois de uma
+tentativa de bootstrap entregue, o Ohayo espera até cinco horas antes de tentar
+outra vez para esse agendamento, inclusive após reiniciar o app; se uma janela
+real aparecer antes, seu transcript substitui o cooldown. Falhas transitórias
+conhecidas mantêm o retry exponencial mais curto.
 O backoff começa quando a falha retorna. Um hand-off agendado mantém seu próprio
-cooldown de recuperação mesmo com o bootstrap opt-in desligado. Erros de
+cooldown de recuperação mesmo quando o início automático foi explicitamente
+desligado. Erros de
 autenticação, CLI, permissão ou configuração param em um estado que
 exige atenção, em vez de virar outro cooldown. Pausar a conta ou desligar a
 opção cancela o trabalho de bootstrap. Depois de detectar uma janela, o Ohayo
 arma no fim dela e encadeia a próxima; uma tentativa redundante é pulada
 enquanto a janela está ativa.
-Agendamentos criados por versões antigas continuam
-aguardando até você editá-los e habilitar essa opção explicitamente. Um
-agendamento de **Horários fixos** sempre dispara nos seus horários × dias da
+Um agendamento de **Horários fixos** sempre dispara nos seus horários × dias da
 semana, tanto em batch quanto no modo interativo. No wake, horários fixos
 disparam no máximo uma vez para recuperar a ocorrência mais recente que perdeu
 — um sleep longo nunca gera uma rajada de disparos atrasados, e o launch em si

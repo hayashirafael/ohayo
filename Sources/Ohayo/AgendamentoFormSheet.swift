@@ -223,6 +223,8 @@ struct AgendamentoFormSheet: View {
                              skill: skillBinding,
                              availableSkills: availableSkills,
                              workingDir: $draft.workingDir,
+                             trustWorkingDirectory:
+                                $draft.trustWorkingDirectory,
                              accounts: state.accounts(for: .claude),
                              accountLabel: { state.label(for: $0) },
                              strings: strings,
@@ -230,7 +232,7 @@ struct AgendamentoFormSheet: View {
         } else if draft.kind == .codex {
             CodexConfigForm(model: $draft.codexModel,
                             reasoning: $draft.codexReasoning,
-                            allowFullAccess: $draft.codexAllowFullAccess,
+                            accessMode: $draft.codexAccessMode,
                             availableModels: codexModels,
                             configDir: $draft.account,
                             skill: skillBinding,
@@ -620,6 +622,10 @@ struct AgendamentoFormSheet: View {
             return strings.continuousConflict
         case .accountUnavailable:
             return strings.accountFolderMissing
+        case .workingDirectoryUnavailable:
+            return strings.workingDirectoryAuthorizationDenied(
+                for: draft.kind
+            )
         }
     }
 
@@ -740,7 +746,7 @@ struct AgendamentoFormSheet: View {
             || draft.safeMode != Message.defaultSafeMode
             || !draft.codexModel.isEmpty
             || draft.codexReasoning != nil
-            || !draft.codexAllowFullAccess
+            || draft.codexAccessMode != .fullAccess
             || draft.timeoutSeconds != nil
             || draft.skill?.isEmpty == false
             || !draft.workingDir.isEmpty

@@ -9,6 +9,7 @@ struct ClaudeConfigForm: View {
     @Binding var skill: String?
     let availableSkills: [SkillRef]
     @Binding var workingDir: String
+    @Binding var trustWorkingDirectory: Bool
     let accounts: [URL]
     let accountLabel: (URL) -> String
     let strings: L10n
@@ -48,7 +49,11 @@ struct ClaudeConfigForm: View {
             SkillPickerRows(skill: $skill, availableSkills: availableSkills, strings: strings)
             GridRow {
                 ConfigRowLabel("")
-                WorkingDirectoryPicker(workingDir: $workingDir, strings: strings)
+                WorkingDirectoryPicker(
+                    workingDir: $workingDir,
+                    trustWorkingDirectory: $trustWorkingDirectory,
+                    strings: strings
+                )
             }
             GridRow {
                 ConfigRowLabel("")
@@ -67,7 +72,7 @@ struct ClaudeConfigForm: View {
 struct CodexConfigForm: View {
     @Binding var model: String
     @Binding var reasoning: Message.CodexReasoning?
-    @Binding var allowFullAccess: Bool
+    @Binding var accessMode: CodexAccessMode
     let availableModels: [CodexModelOption]
     @Binding var configDir: String?
     @Binding var skill: String?
@@ -142,16 +147,29 @@ struct CodexConfigForm: View {
             SkillPickerRows(skill: $skill, availableSkills: availableSkills, strings: strings)
             GridRow {
                 ConfigRowLabel("")
-                WorkingDirectoryPicker(workingDir: $workingDir, strings: strings)
+                WorkingDirectoryPicker(
+                    workingDir: $workingDir,
+                    trustWorkingDirectory: nil,
+                    strings: strings
+                )
             }
             GridRow {
-                ConfigRowLabel("")
-                Toggle(
-                    strings.codexAllowFullAccess,
-                    isOn: $allowFullAccess
-                )
-                .toggleStyle(.checkbox)
-                .help(strings.codexAllowFullAccessHelp)
+                ConfigRowLabel(strings.codexAccess)
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("", selection: $accessMode) {
+                        ForEach(CodexAccessMode.allCases, id: \.self) {
+                            Text(strings.codexAccessMode($0)).tag($0)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel(strings.codexAccess)
+
+                    Text(strings.codexAccessModeHelp(accessMode))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .font(.caption)
@@ -217,6 +235,7 @@ struct TimeoutPicker: View {
 
 struct WorkingDirectoryPicker: View {
     @Binding var workingDir: String
+    let trustWorkingDirectory: Binding<Bool>?
     let strings: L10n
 
     private var isEmpty: Bool {
@@ -229,26 +248,46 @@ struct WorkingDirectoryPicker: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Button(action: chooseDirectory) {
-                HStack(spacing: 6) {
-                    Image(systemName: "folder")
-                    Text(displayText)
-                        .foregroundStyle(isEmpty ? .secondary : .primary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Button(action: chooseDirectory) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder")
+                        Text(displayText)
+                            .foregroundStyle(
+                                isEmpty ? .secondary : .primary
+                            )
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-            .help(strings.workingDirectoryDefault)
+                .buttonStyle(.bordered)
+                .help(strings.workingDirectoryDefault)
 
-            if !isEmpty {
-                Button { workingDir = "" } label: { Image(systemName: "xmark.circle.fill") }
+                if !isEmpty {
+                    Button { workingDir = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
                     .buttonStyle(.plain)
                     .help(strings.clearWorkingDirectory)
                     .accessibilityLabel(strings.clearWorkingDirectory)
+                }
+            }
+
+            if !isEmpty, let trustWorkingDirectory {
+                Toggle(
+                    strings.trustWorkingDirectory,
+                    isOn: trustWorkingDirectory
+                )
+                .toggleStyle(.checkbox)
+                .help(strings.trustWorkingDirectoryHelp)
+
+                Text(strings.trustWorkingDirectoryHelp)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -259,6 +298,7 @@ struct WorkingDirectoryPicker: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.showsHiddenFiles = true
+        panel.message = strings.workingDirectoryTrustNotice
         panel.prompt = strings.chooseDirectory
         panel.directoryURL = initialDirectoryURL()
         guard panel.runModal() == .OK, let url = panel.url else { return }

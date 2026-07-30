@@ -16,23 +16,38 @@ final class ProviderVisualTests: XCTestCase {
         XCTAssertEqual(AgendamentoDraft(editing: nil).text, "")
     }
 
-    func testNovoAgendamentoClaudeOuCodexComecaNoTerminal() {
+    func testNovoAgendamentoClaudeOuCodexComecaNoTerminalEExecutaAoAbrir() {
         let restored = AgendamentoDraft(editing: nil)
         XCTAssertEqual(restored.outputMode, .terminal)
-        XCTAssertFalse(restored.bootstrapWhenInactive)
+        XCTAssertTrue(restored.bootstrapWhenInactive)
     }
 
-    func testAgendamentoLegadoContinuoExigeOptInAoEditar() {
+    func testAgendamentoLegadoContinuoExecutaAutomaticamenteAoEditar() {
         let task = ScheduledTask(
             uid: UUID(),
             command: AppState.defaultMessage,
             repetition: .continuous
         )
 
-        XCTAssertFalse(task.resolvedBootstrapWhenInactive)
-        XCTAssertFalse(
+        XCTAssertTrue(task.resolvedBootstrapWhenInactive)
+        XCTAssertTrue(
             AgendamentoDraft(editing: task).bootstrapWhenInactive
         )
+    }
+
+    func testConverterAgendamentoFixoEmContinuoUsaAutoInicioPadrao() {
+        let fixed = ScheduledTask(
+            uid: UUID(),
+            command: AppState.defaultMessage,
+            repetition: .fixed,
+            bootstrapWhenInactive: false
+        )
+
+        var draft = AgendamentoDraft(editing: fixed)
+        draft.repetition = .continuous
+
+        XCTAssertTrue(draft.bootstrapWhenInactive)
+        XCTAssertTrue(draft.normalizedTask().resolvedBootstrapWhenInactive)
     }
 
     func testModoDeSaidaNormalizaMensagensPersistidas() {

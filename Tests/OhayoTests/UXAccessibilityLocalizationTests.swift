@@ -103,6 +103,86 @@ final class UXAccessibilityLocalizationTests: XCTestCase {
         )
     }
 
+    func testDiretorioPadraoDaInterfaceEhOWorkspaceDoOhayo() {
+        XCTAssertEqual(
+            L10n(language: .english).workingDirectoryDefault,
+            "Directory (Ohayo workspace by default)"
+        )
+        XCTAssertEqual(
+            L10n(language: .portuguese).workingDirectoryDefault,
+            "Diretório (workspace do Ohayo por padrão)"
+        )
+    }
+
+    func testPickerEConsentimentoExplicamTrustDaPasta() {
+        XCTAssertTrue(
+            L10n(language: .english).workingDirectoryTrustNotice.contains(
+                "pre-authorize project trust"
+            )
+        )
+        XCTAssertTrue(
+            L10n(language: .portuguese).workingDirectoryTrustNotice.contains(
+                "pré-autorize o trust do projeto"
+            )
+        )
+        XCTAssertEqual(
+            L10n(language: .english).trustWorkingDirectory,
+            "Trust this folder for Claude"
+        )
+        XCTAssertEqual(
+            L10n(language: .portuguese).trustWorkingDirectory,
+            "Confiar nesta pasta para o Claude"
+        )
+        XCTAssertTrue(
+            L10n(language: .portuguese).trustWorkingDirectoryHelp.contains(
+                "ao salvar"
+            )
+        )
+        XCTAssertTrue(
+            L10n(language: .portuguese).trustWorkingDirectoryHelp.contains(
+                "projeto Claude"
+            )
+        )
+    }
+
+    func testModosDeAcessoCodexTemCopiasLocalizadas() {
+        let english = L10n(language: .english)
+        XCTAssertEqual(english.codexAccess, "Access")
+        XCTAssertEqual(
+            CodexAccessMode.allCases.map(english.codexAccessMode),
+            ["Full access", "Folder write", "Read-only"]
+        )
+
+        let portuguese = L10n(language: .portuguese)
+        XCTAssertEqual(portuguese.codexAccess, "Acesso")
+        XCTAssertEqual(
+            CodexAccessMode.allCases.map(portuguese.codexAccessMode),
+            ["Acesso total", "Escrita na pasta", "Somente leitura"]
+        )
+        XCTAssertTrue(
+            portuguese.codexAccessModeHelp(.workspaceWrite).contains(
+                "pasta de trabalho confiada"
+            )
+        )
+        XCTAssertTrue(
+            portuguese.codexAccessModeHelp(.readOnly).contains(
+                "somente leitura"
+            )
+        )
+        XCTAssertTrue(
+            english.workingDirectoryAuthorizationDenied(for: .codex)
+                .contains("Read-only")
+        )
+        XCTAssertTrue(
+            portuguese.workingDirectoryAuthorizationDenied(for: .codex)
+                .contains("Somente leitura")
+        )
+        XCTAssertTrue(
+            english.workingDirectoryAuthorizationDenied(for: .claude)
+                .contains("Trust this folder for Claude")
+        )
+    }
+
     func testArquivosDeRespostaEModelosFallbackTemCopiasLocalizadas() {
         let english = L10n(language: .english)
         XCTAssertEqual(english.markdownFile, "Markdown (.md)")

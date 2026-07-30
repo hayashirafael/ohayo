@@ -22,7 +22,7 @@ struct AgendamentoDraft: Equatable {
     var safeMode = Message.defaultSafeMode
     var codexModel = ""
     var codexReasoning: Message.CodexReasoning?
-    var codexAllowFullAccess = true
+    var codexAccessMode: CodexAccessMode = .fullAccess
     var outputMode: AgendamentoOutputMode = .terminal
     var responseFormat: ResponseFileFormat = .markdown
     var responseDirectory: String
@@ -32,10 +32,11 @@ struct AgendamentoDraft: Equatable {
     var account: String?
     var skill: String?
     var workingDir = ""
+    var trustWorkingDirectory = true
     var repetition: ScheduledTask.Repetition = .fixed
     var times: [Int] = [9 * 60]
     var weekdays: Set<Int> = Set(1...7)
-    var bootstrapWhenInactive = false
+    var bootstrapWhenInactive = true
     var enabled = true
 
     init(
@@ -54,7 +55,13 @@ struct AgendamentoDraft: Equatable {
             task.times.isEmpty ? [9 * 60] : task.times
         )
         weekdays = task.weekdays.isEmpty ? Set(1...7) : task.weekdays
-        bootstrapWhenInactive = task.resolvedBootstrapWhenInactive
+        // O campo não se aplica a Horários Fixos. Se a pessoa converter um
+        // deles para Contínuo nesta edição, começa com o mesmo auto-início
+        // usado por um agendamento novo; somente um opt-out de um Contínuo
+        // existente deve ser preservado.
+        bootstrapWhenInactive = task.repetition == .continuous
+            ? task.resolvedBootstrapWhenInactive
+            : true
         enabled = task.enabled
 
         let message = task.resolvedCommand
@@ -65,7 +72,7 @@ struct AgendamentoDraft: Equatable {
         safeMode = message.resolvedSafeMode
         codexModel = message.codexModel ?? ""
         codexReasoning = message.codexReasoning
-        codexAllowFullAccess = message.resolvedCodexAllowFullAccess
+        codexAccessMode = message.resolvedCodexAccessMode
         outputMode = Self.outputMode(for: message)
         responseFormat = message.resolvedResponseFileFormat
         responseDirectory = message.responseDirectory
@@ -78,6 +85,7 @@ struct AgendamentoDraft: Equatable {
         account = Self.canonicalAccountPath(message.configDir)
         skill = message.skill
         workingDir = message.workingDir ?? ""
+        trustWorkingDirectory = message.resolvedTrustWorkingDirectory
     }
 
     static func outputMode(for message: Message) -> AgendamentoOutputMode {
@@ -147,6 +155,17 @@ struct AgendamentoDraft: Equatable {
             kind: kind,
             outputMode: outputMode
         )
+        let persistedTrustWorkingDirectory: Bool?
+        switch kind {
+        case .codex:
+            persistedTrustWorkingDirectory =
+                codexAccessMode.persistedTrustWorkingDirectory
+        case .claude:
+            persistedTrustWorkingDirectory =
+                !workingDir.isEmpty && !trustWorkingDirectory ? false : nil
+        case .shell:
+            persistedTrustWorkingDirectory = nil
+        }
         let command = Message(
             text: trimmedText,
             kind: kind,
@@ -160,6 +179,7 @@ struct AgendamentoDraft: Equatable {
             configDir: effectiveAccount,
             workingDir: kind != .shell && !workingDir.isEmpty
                 ? workingDir : nil,
+            trustWorkingDirectory: persistedTrustWorkingDirectory,
             showResponse: outputMode == .response ? true : nil,
             runInTerminal: kind != .shell && outputMode != .terminal
                 ? false : nil,
@@ -174,8 +194,8 @@ struct AgendamentoDraft: Equatable {
             codexModel: kind == .codex && !trimmedModel.isEmpty
                 ? trimmedModel : nil,
             codexReasoning: kind == .codex ? codexReasoning : nil,
-            codexAllowFullAccess: kind == .codex && !codexAllowFullAccess
-                ? false : nil,
+            codexAllowFullAccess: kind == .codex
+                ? codexAccessMode.persistedFullAccess : nil,
             responseFileFormat: savesResponseFile
                 ? responseFormat : nil,
             responseDirectory: savesResponseFile
@@ -210,6 +230,7 @@ enum AgendamentoIssue: Equatable {
     case continuousShell
     case continuousConflict(existing: UUID)
     case accountUnavailable(URL)
+    case workingDirectoryUnavailable(URL)
 }
 
 struct AgendamentoEvaluation: Equatable {
@@ -266,9 +287,11 @@ enum AgendamentoEditError: Error, Equatable {
 @MainActor
 final class AgendamentoEditor {
     typealias IsDirectory = (URL) -> Bool
+    typealias AuthorizeDirectory = (URL) -> Bool
 
     private let state: AppState
     private let isDirectory: IsDirectory
+    private let authorizeDirectory: AuthorizeDirectory
 
     init(
         state: AppState,
@@ -278,10 +301,23 @@ final class AgendamentoEditor {
                 atPath: directory.path,
                 isDirectory: &isDirectory
             ) && isDirectory.boolValue
+        },
+        authorizeDirectory: @escaping AuthorizeDirectory = { directory in
+            do {
+                _ = try FileManager.default.contentsOfDirectory(
+                    at: directory,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                )
+                return true
+            } catch {
+                return false
+            }
         }
     ) {
         self.state = state
         self.isDirectory = isDirectory
+        self.authorizeDirectory = authorizeDirectory
     }
 
     func formSnapshot(
@@ -349,6 +385,21 @@ final class AgendamentoEditor {
             let evaluation = evaluate(draft)
             guard evaluation.canSave else {
                 return .failure(.invalid(evaluation.issues))
+            }
+            let message = evaluation.normalized.resolvedCommand
+            if message.resolvedTrustWorkingDirectory,
+               let rawPath = message.workingDir?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+               !rawPath.isEmpty {
+                let expanded = NSString(string: rawPath)
+                    .expandingTildeInPath
+                let directory = URL(fileURLWithPath: expanded)
+                    .standardizedFileURL
+                guard authorizeDirectory(directory) else {
+                    return .failure(.invalid([
+                        .workingDirectoryUnavailable(directory),
+                    ]))
+                }
             }
             var updated = state.tasks
             if let base = draft.base {

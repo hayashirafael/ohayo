@@ -467,17 +467,37 @@ struct L10n {
         text(en: "Ignore Claude customizations (not a sandbox)",
              pt: "Ignorar customizações do Claude (não é sandbox)")
     }
-    var codexAllowFullAccess: String {
-        text(
-            en: "Allow full access (prevents approval pauses)",
-            pt: "Permitir acesso total (evita pausas para aprovação)"
-        )
+    var codexAccess: String {
+        text(en: "Access", pt: "Acesso")
     }
-    var codexAllowFullAccessHelp: String {
-        text(
-            en: "Runs Codex without sandbox or approval prompts. Disable it for read-only execution.",
-            pt: "Executa o Codex sem sandbox nem pedidos de aprovação. Desative para execução somente leitura."
-        )
+    func codexAccessMode(_ mode: CodexAccessMode) -> String {
+        switch mode {
+        case .fullAccess:
+            return text(en: "Full access", pt: "Acesso total")
+        case .workspaceWrite:
+            return text(en: "Folder write", pt: "Escrita na pasta")
+        case .readOnly:
+            return text(en: "Read-only", pt: "Somente leitura")
+        }
+    }
+    func codexAccessModeHelp(_ mode: CodexAccessMode) -> String {
+        switch mode {
+        case .fullAccess:
+            return text(
+                en: "Runs without sandbox or approval prompts.",
+                pt: "Executa sem sandbox nem pedidos de aprovação."
+            )
+        case .workspaceWrite:
+            return text(
+                en: "Lets Codex change files only inside the trusted working directory.",
+                pt: "Permite que o Codex altere arquivos apenas dentro da pasta de trabalho confiada."
+            )
+        case .readOnly:
+            return text(
+                en: "Uses a read-only sandbox and does not pre-authorize folder trust.",
+                pt: "Usa um sandbox somente leitura e não pré-autoriza a confiança da pasta."
+            )
+        }
     }
     var responseFileFormat: String {
         text(en: "Response file", pt: "Arquivo da resposta")
@@ -552,7 +572,49 @@ struct L10n {
     var codexDefault: String { text(en: "Default (~/.codex)", pt: "Padrão (~/.codex)") }
     var accountDefaultModel: String { text(en: "Model (account default)", pt: "Modelo (padrão da conta)") }
     var workingDirectoryDefault: String {
-        text(en: "Directory (~ by default)", pt: "Diretório (~ por padrão)")
+        text(
+            en: "Directory (Ohayo workspace by default)",
+            pt: "Diretório (workspace do Ohayo por padrão)"
+        )
+    }
+    var workingDirectoryTrustNotice: String {
+        text(
+            en: "Choose the folder where this schedule should run. After choosing, you can let Ohayo request access and pre-authorize project trust.",
+            pt: "Escolha a pasta onde este agendamento deve executar. Depois, você poderá permitir que o Ohayo solicite acesso e pré-autorize o trust do projeto."
+        )
+    }
+    var trustWorkingDirectory: String {
+        text(
+            en: "Trust this folder for Claude",
+            pt: "Confiar nesta pasta para o Claude"
+        )
+    }
+    var trustWorkingDirectoryHelp: String {
+        text(
+            en: "Ohayo requests folder access when you save and avoids the basic Claude project trust prompt in future runs.",
+            pt: "O Ohayo solicita acesso à pasta ao salvar e evita o prompt básico de confiança do projeto Claude nos próximos disparos."
+        )
+    }
+    func workingDirectoryAuthorizationDenied(
+        for kind: Message.Kind
+    ) -> String {
+        switch kind {
+        case .claude:
+            return text(
+                en: "Ohayo could not access this folder. Choose it again and allow access, or turn off Trust this folder for Claude.",
+                pt: "O Ohayo não conseguiu acessar esta pasta. Escolha-a novamente e permita o acesso, ou desative Confiar nesta pasta para o Claude."
+            )
+        case .codex:
+            return text(
+                en: "Ohayo could not access this folder. Choose it again and allow access, or select Read-only access.",
+                pt: "O Ohayo não conseguiu acessar esta pasta. Escolha-a novamente e permita o acesso, ou selecione o acesso Somente leitura."
+            )
+        case .shell:
+            return text(
+                en: "Ohayo could not access this folder. Choose it again and allow access.",
+                pt: "O Ohayo não conseguiu acessar esta pasta. Escolha-a novamente e permita o acesso."
+            )
+        }
     }
     var chooseDirectory: String { text(en: "Choose", pt: "Escolher") }
     var clearWorkingDirectory: String {

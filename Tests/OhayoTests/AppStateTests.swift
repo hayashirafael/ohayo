@@ -232,6 +232,34 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(msg.resolvedSafeMode)
     }
 
+    func testTrustDaPastaMantemLegadoEPermiteRevogacaoExplicita() throws {
+        let legacyJSON =
+            #"{"text":"revise","kind":"codex","workingDir":"/tmp/projeto"}"#
+                .data(using: .utf8)!
+        let legacy = try JSONDecoder().decode(
+            Message.self,
+            from: legacyJSON
+        )
+        let revoked = Message(
+            text: "revise",
+            kind: .codex,
+            workingDir: "/tmp/projeto",
+            trustWorkingDirectory: false
+        )
+
+        XCTAssertNil(legacy.trustWorkingDirectory)
+        XCTAssertTrue(legacy.resolvedTrustWorkingDirectory)
+        XCTAssertFalse(revoked.resolvedTrustWorkingDirectory)
+        XCTAssertFalse(
+            Message(
+                text: "echo oi",
+                kind: .shell,
+                workingDir: "/tmp/projeto",
+                trustWorkingDirectory: true
+            ).resolvedTrustWorkingDirectory
+        )
+    }
+
     func testHomeInjetadoControlaTodosOsDefaultsDeConta() throws {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("home-\(UUID().uuidString)")
@@ -940,7 +968,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.tasks.map(\.uid), [bom])
     }
 
-    func testBootstrapContinuoAusenteFicaDesligadoEFalsePersiste() throws {
+    func testBootstrapContinuoLegadoLigaAutomaticamenteEFalsePersiste() throws {
         let legado = try JSONDecoder().decode(
             ScheduledTask.self,
             from: Data("""
@@ -948,7 +976,7 @@ final class AppStateTests: XCTestCase {
             """.utf8)
         )
         XCTAssertNil(legado.bootstrapWhenInactive)
-        XCTAssertFalse(legado.resolvedBootstrapWhenInactive)
+        XCTAssertTrue(legado.resolvedBootstrapWhenInactive)
 
         var optOut = legado
         optOut.bootstrapWhenInactive = false

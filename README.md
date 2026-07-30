@@ -21,13 +21,14 @@ app updates.
 
 - **Unified schedules** — one concept for everything scheduled. Each
   schedule carries an embedded command and a repetition: **Continuous**
-  (chains 5-hour windows, with an explicit opt-in before starting without
-  active-window evidence) or **Fixed times**
+  (chains 5-hour windows and starts automatically when no active-window
+  evidence exists, unless you turn that behavior off) or **Fixed times**
   (times × weekdays). Managed in the **Schedules** section
 - **Configurable commands** — a Claude prompt (model, effort, safe-mode,
   working directory), a Codex prompt (models and reasoning efforts discovered
-  from the selected account, full filesystem access on by default, working
-  directory), or any shell command — embedded directly in the schedule.
+  from the selected account, full access by default with folder-write and
+  read-only alternatives, working directory), or any shell command — embedded
+  directly in the schedule.
   Claude/Codex prompts open in Terminal.app by default so you can keep
   interacting in the same session; turn that off to run them in batch mode
 - **Multi-account, Claude and Codex** — the default dirs (`~/.claude`,
@@ -90,12 +91,11 @@ Download `Ohayo-<version>.dmg` from the
 **Applications**.
 
 > Published releases since v1.2.0 are universal for Apple Silicon and Intel.
-> The current free tester distribution is ad-hoc signed and not notarized. On
-> first launch, Gatekeeper may require right-clicking the app and selecting
-> **Open**, or using **System Settings → Privacy & Security → Open Anyway**.
-> Once all Apple signing credentials are configured, the same release workflow
-> automatically switches to Developer ID signing, hardened runtime,
-> notarization, and stapling.
+> Existing ad-hoc tester builds can lose macOS privacy authorization after an
+> update because their code identity is not stable. New public releases from
+> this revision are blocked unless they are signed with Developer ID, hardened,
+> notarized, and stapled. Local source builds remain ad-hoc and can therefore
+> ask for protected-folder access again after each rebuild.
 
 ### From source
 
@@ -136,11 +136,10 @@ final manual Homebrew/DMG upgrade. Releases from 1.2.0 onward check the signed
 feed daily and offer **Install and Relaunch** in-app. Use **Ohayo → General →
 About → Check for Updates…** to check immediately.
 
-Even in the free tester mode, release archives and the feed are
-cryptographically validated by Sparkle's separate EdDSA key. Apple Developer
-ID and notarization are intentionally deferred; until then, the first install
-does not have Apple's Gatekeeper trust. The GitHub release workflow publishes
-the final DMG and its signed `appcast.xml` together.
+Release archives and the feed are cryptographically validated by Sparkle's
+separate EdDSA key. The GitHub release workflow now fails closed unless all
+Developer ID, notarization, and Sparkle credentials are present; it publishes
+the notarized DMG and signed `appcast.xml` together.
 
 ## Quick start
 
@@ -218,6 +217,14 @@ If notifications or Terminal automation were denied, change them in **System
 Settings → Notifications → Ohayo** or **System Settings → Privacy & Security →
 Automation**, then reopen the guide to refresh or test the integration.
 
+When you save a Claude schedule with **Trust this folder for Claude** enabled,
+or a Codex schedule using **Full access** or **Folder write**, Ohayo checks
+access immediately. For a folder protected by macOS, such as Documents, choose
+**Allow** in the system prompt. A Developer ID-signed Ohayo keeps that
+authorization across updates; an ad-hoc local/test rebuild has a different
+code identity and macOS may ask again. The app cannot click or grant this
+privacy permission on your behalf.
+
 ## How it works
 
 To maintain Continuous Repetitions, Ohayo streams the account's local transcripts
@@ -253,26 +260,34 @@ By default, Claude/Codex open in Terminal.app without `-p` / `exec`, so the
 interactive session stays open. Opening Terminal is recorded as **Launched**,
 not as a completed run: Ohayo cannot observe that session's final exit status.
 A fixed-time interactive schedule still opens at its scheduled time when an
-account has an active window. With no working directory, it opens in
-`~/Library/Application Support/Ohayo/workspace`. The private temporary launch
-script is mode `0600`, removes itself on exit/signals, and stale crash residues
-are cleaned up. Ohayo seeds basic Claude project trust only for that
-app-managed workspace. A working directory selected or imported by the user is
-never pre-trusted by Ohayo, so Claude remains responsible for showing its normal
-trust prompt in Terminal when needed.
-External `CLAUDE.md` imports are never pre-approved either; their consent also
-remains visible.
+account has an active window. With no working directory, interactive and batch
+provider runs use `~/Library/Application Support/Ohayo/workspace` instead of
+your home directory (or the isolated `Ohayo Dev/workspace` equivalent). The
+private temporary launch script is mode `0600`, removes itself on exit/signals,
+and stale crash residues are cleaned up.
+
+After you choose a working directory, Ohayo can request folder access when the
+schedule is saved. Claude keeps a dedicated **Trust this folder for Claude**
+option, enabled by default, which records only basic project trust. Codex uses
+one **Access** control with three explicit modes: **Full access** (default,
+without sandbox or approval prompts), **Folder write** (trusted folder with a
+`workspace-write` sandbox), and **Read-only** (no pre-authorized folder trust).
+Interactive trusted Codex sessions receive an ephemeral official
+`projects.<path>.trust_level="trusted"` override; Ohayo never rewrites
+`config.toml`. External `CLAUDE.md` imports are never pre-approved, so their
+separate consent remains visible.
 
 The built-in Claude defaults — Haiku, low effort, ignored customizations and
 `1+1` — provide a minimal command for Continuous Repetition. Ohayo reads the
 selected Codex account's `models_cache.json` to offer only listed models and
 their supported reasoning efforts, with a current built-in fallback when that
-cache is unavailable. A batch Codex run launches `codex exec [--model <model>]
---dangerously-bypass-approvals-and-sandbox [-c
-model_reasoning_effort=<effort>]` by default; clearing **Allow full access**
-uses `--sandbox read-only` instead. The same choice applies to interactive
-Terminal sessions, and the prompt always comes from stdin. When model or
-reasoning is set to **Account default**, Ohayo omits the corresponding flag so
+cache is unavailable. A batch Codex run launches `codex exec [--model <model>]`
+with `--dangerously-bypass-approvals-and-sandbox` for **Full access**,
+`--sandbox workspace-write` for **Folder write**, or `--sandbox read-only` for
+**Read-only**, followed by `--skip-git-repo-check --color never` and an optional
+reasoning override. The same access mode applies to interactive Terminal
+sessions, and the batch prompt always comes from stdin. When model or reasoning
+is set to **Account default**, Ohayo omits the corresponding flag so
 `config.toml` wins.
 
 When **Show response** is enabled for a batch Claude/Codex schedule, the full
@@ -302,24 +317,23 @@ Existing account folders use their canonical filesystem path as identity.
 Registering or selecting a symlink to the same Claude/Codex account therefore
 does not create another queue, schedule, pause state or quota cooldown.
 
-A new **Continuous** schedule waits when no active-window evidence exists
-unless you explicitly enable **Try to start when no active window is
-detected**. The form warns that the command may consume provider quota and
-that an interactive Terminal session can still require your confirmation.
+A new **Continuous** schedule tries to start automatically when no active-window
+evidence exists. This is also the compatibility default for continuous
+schedules created by older Ohayo versions. Turn off **Try to start when no
+active window is detected** to keep a schedule waiting instead. The form warns
+that the command may consume provider quota.
 After a delivered bootstrap attempt, Ohayo waits up to five hours before
 trying another one for that schedule, including across app restarts; if a real
 window appears first, its transcript replaces the cooldown. Known transient
 failures retain their shorter exponential retry, measured after the failure
 returns. A scheduled hand-off keeps its own crash-recovery cooldown even when
-bootstrap opt-in is off. Authentication, CLI,
+automatic start has been explicitly turned off. Authentication, CLI,
 permission or configuration errors stop in a needs-attention state instead of
 becoming another cooldown. Pausing the account or turning the option off
 cancels bootstrap work.
 After a window is detected, Ohayo arms at its end and chains the next one; a
 redundant attempt is skipped while the account window is active.
-Schedules created by older Ohayo versions remain waiting until you edit them
-and explicitly enable this option. A **Fixed times** schedule always runs at
-its times × weekdays, in either batch or interactive mode. On wake, fixed times
-runs at most once to catch up the most recent occurrence missed — a long sleep
-never triggers a burst of backlogged runs, and launch itself never replays
-occurrences missed before it.
+A **Fixed times** schedule always runs at its times × weekdays, in either batch
+or interactive mode. On wake, fixed times runs at most once to catch up the
+most recent occurrence missed — a long sleep never triggers a burst of
+backlogged runs, and launch itself never replays occurrences missed before it.
