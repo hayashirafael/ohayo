@@ -1,10 +1,10 @@
 import Foundation
 
-/// Runtime identity for the installed app and local development builds.
+/// Identidade de runtime do app instalado e dos builds locais.
 ///
-/// Only the official bundle identifier selects production. An unbundled
-/// executable (`swift run Ohayo`) and any non-production bundle fail safely
-/// into the isolated development profile.
+/// Somente o bundle ID oficial seleciona produção. Um executável sem bundle
+/// (`swift run Ohayo`) e qualquer bundle não oficial falham com segurança para
+/// o perfil isolado de desenvolvimento.
 enum AppRuntimeProfile: String, CaseIterable {
     case production
     case development
@@ -41,9 +41,9 @@ enum AppRuntimeProfile: String, CaseIterable {
     var supportsAppUpdates: Bool { self == .production }
     var supportsLoginItem: Bool { self == .production }
 
-    /// Packaged apps use `.standard`, whose domain is their bundle identifier.
-    /// An unbundled SwiftPM executable explicitly joins the development domain
-    /// instead of relying on the host process's implicit preferences domain.
+    /// Apps empacotados usam `.standard`, cujo domínio é o bundle ID. Um
+    /// executável SwiftPM sem bundle entra explicitamente no domínio Dev em
+    /// vez de depender do domínio implícito do processo hospedeiro.
     static func defaultUserDefaults(
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) -> UserDefaults {

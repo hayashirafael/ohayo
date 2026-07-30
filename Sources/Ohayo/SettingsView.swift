@@ -3,9 +3,12 @@ import SwiftUI
 enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     case contas, horarios, historico, geral
 
-    /// `geral` lives in the native Settings scene. Keep the case in the
-    /// shared navigation state so existing deep links remain source-compatible.
-    static let operationalCases: [SettingsSection] = [.horarios, .contas, .historico]
+    static let sidebarCases: [SettingsSection] = [
+        .horarios,
+        .contas,
+        .historico,
+        .geral
+    ]
 
     var id: String { rawValue }
     func title(language: AppLanguage) -> String {
@@ -21,23 +24,21 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// Operational window for the parts of Ohayo users monitor and act on.
-///
-/// App preferences live in the native SwiftUI `Settings` scene instead of
-/// competing with accounts, schedules, and run history in this sidebar.
+/// Janela central do Ohayo: operação, histórico e ajustes no mesmo lugar.
 struct SettingsView: View {
     @ObservedObject var state: AppState
     let env: AppEnvironment
+    @ObservedObject var updater: AppUpdater
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsSection.operationalCases, selection: $state.settingsSection) { section in
+            List(SettingsSection.sidebarCases, selection: $state.settingsSection) { section in
                 Label(section.title(language: state.language), systemImage: section.icon).tag(section)
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             detail
-                .navigationTitle(operationalSelection.title(language: state.language))
+                .navigationTitle(state.settingsSection.title(language: state.language))
                 .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(
@@ -46,29 +47,15 @@ struct SettingsView: View {
             minHeight: 520,
             idealHeight: 600
         )
-        .onAppear(perform: normalizeSelection)
-        .onChange(of: state.settingsSection) { _ in
-            normalizeSelection()
-        }
     }
 
     @ViewBuilder
     private var detail: some View {
-        switch operationalSelection {
+        switch state.settingsSection {
         case .contas: ContasView(state: state)
         case .horarios: HorariosView(state: state, env: env)
         case .historico: HistoryTab(state: state)
-        case .geral: EmptyView()
-        }
-    }
-
-    private var operationalSelection: SettingsSection {
-        state.settingsSection == .geral ? .horarios : state.settingsSection
-    }
-
-    private func normalizeSelection() {
-        if state.settingsSection == .geral {
-            state.settingsSection = .horarios
+        case .geral: GeneralTab(state: state, updater: updater)
         }
     }
 }

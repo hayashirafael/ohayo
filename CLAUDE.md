@@ -1,12 +1,16 @@
 # Ohayo Agent Notes
 
+`AGENTS.md` is the canonical repository workflow and invariant guide. This file
+adds the detailed architecture map used by Claude Code; keep both aligned with
+the current source.
+
 ## Overview
 
-macOS menu bar app (Swift 5.9 + SwiftUI `MenuBarExtra`, macOS 13+, SPM, zero
-external dependencies) that keeps Claude plan accounts with their 5-hour usage
-window always open, renewing each account on its own. The app is
-account-centered: there are no global schedules, no default account, no
-globally-active message.
+macOS menu bar app (Swift 5.9 + SwiftUI `MenuBarExtra`, macOS 13+, SPM, with
+Sparkle as its external package dependency) that schedules Claude, Codex and
+shell commands and can chain supported 5-hour usage windows per account.
+Provider schedules are account-centered; shell schedules have no provider
+account.
 
 ## Domain vocabulary
 
@@ -67,6 +71,9 @@ globally-active message.
   change provider.
 ## Architecture map
 
+- `AppRuntimeProfile.swift` — resolve produção somente para o bundle ID
+  oficial. `Ohayo Dev.app` e `swift run Ohayo` compartilham identidade de
+  desenvolvimento, preferências, Application Support e políticas isoladas.
 - `AppState.swift` — central observable state and UserDefaults persistence for
   unified agendamentos. Pause is per account: `pausedAccounts: Set<String>`
   (canonical paths, persisted). Typed renewal recovery
@@ -74,22 +81,21 @@ globally-active message.
   canonical account and persisted across restarts. It remains attached while
   a custom folder is offline and across a downgrade that cannot decode a
   future task; corrupt entries fail closed rather than enabling another
-  bootstrap. `windowEnds: [URL: Date]` (not persisted)
-  holds the detected 5h-window end per scheduled account, published by
-  `AppEnvironment.refreshWindowEnds()`; `quotaUnavailableReasons` keeps
-  fail-closed detection distinct from an inactive window. `accountFilter:
-  URL?` is the deep-link the menu panel sets to scope the Tasks/History tabs
-  to one account
+  bootstrap. `renewalSnapshot` (not persisted) publishes the typed continuous
+  lifecycle per task/account; its quota-unavailable and needs-attention
+  projections keep fail-closed detection distinct from an inactive window.
+  `accountFilter: URL?` is the deep-link the menu panel sets to scope the
+  Schedules/History sections to one account
   (`taskMatchesFilter`/`matchesFilter`), with a clear-filter chip in both.
   Account-provider registrations, notification privacy and the bounded history
   are persisted; `clearHistory()` deletes the local history blob.
 - `AppEnvironment.swift` — composition root; wires both engines ↔ controller,
   observes sleep/wake and `$tasks` (single `reconfigureSchedules`: continuous
   agendamentos feed `RenewalEngine`, fixed ones `TaskScheduler`).
-  `refreshWindowEnds()` queries the `SessionDetector` for every scheduled
-  account and publishes `AppState.windowEnds`; called when the menu panel
-  opens, no timer of its own. Runner/auth dependencies are injectable so
-  composition tests never depend on the developer's real CLIs/login.
+  A 60-second `statusTick()` synchronizes continuous lifecycle, rearms fixed
+  schedules, records the heartbeat and pulses the UI. Runner/auth dependencies
+  are injectable so composition tests never depend on the developer's real
+  CLIs/login.
 - `RenewalEngine.swift` — accounts with a continuous agendamento; per-account
   timers armed at the detected window end. When no valid window exists, it
   bootstraps only with explicit consent. A delivered attempt creates a
@@ -113,7 +119,8 @@ globally-active message.
   `.launched`, never `.success`. Notification details are private by default
   and only include prompt/response/error/account after explicit opt-in.
 - `Provider.swift` — the claude/codex axis: folder-content detection,
-  transcripts subpath, environment key, CLI binary name, display name.
+  transcripts subpath, usage-window duration, environment key, CLI binary name,
+  display name.
 - `CommandRunner.swift` — subprocess: `claude -p --model … --effort …
   [--safe-mode]`, `codex exec [--model …] --sandbox read-only …
   [-c model_reasoning_effort=…]` (model/reasoning flags omitted when unset →
@@ -157,10 +164,11 @@ globally-active message.
   with matching manifests are exposed as `plugin:skill`. Responses are
   generation-guarded in the form so an old account lookup cannot overwrite a
   newer selection.
-- `SingleInstanceLock.swift` — `flock` on
-  `~/Library/Application Support/Ohayo/instance.lock`. A second launch
-  (dev binary or packaged .app) alerts and exits before `AppEnvironment`
-  exists, avoiding duplicate schedules and history clobbering.
+- `SingleInstanceLock.swift` — `flock` por perfil em
+  `~/Library/Application Support/Ohayo/instance.lock` ou
+  `~/Library/Application Support/Ohayo Dev/instance.lock`. Uma segunda
+  instância do mesmo perfil alerta e sai antes de `AppEnvironment` existir;
+  produção e desenvolvimento podem coexistir.
 - UI: `MenuBarLabel.swift` (just the bar glyph — filled while any account has
   an active window, `!` on error, faded when every scheduled account is
   paused; optional remaining-time text) + `MenuPanel.swift` (the
@@ -169,19 +177,21 @@ globally-active message.
   a stepper in Ajustes › Geral), ordered by time — paused accounts are
   skipped, so the panel only shows what will actually run. The first event is
   a highlight card, the rest compact rows; each shows provider icon · account
-  label · event name · time. Empty states: `noActiveSchedules` /
-  `allAccountsPaused` / `waitingForWindow`. Clicking a card/row opens
-  Settings › Tasks filtered to that account (the `accountFilter` deep-link);
+  label · event name · time. Empty states distinguish no schedules, all
+  disabled, all paused, lifecycle conflict, missing account, invalid
+  configuration, unavailable quota, needs-attention and normal waiting.
+  Clicking a card/row opens Ohayo › Schedules filtered to that account (the
+  `accountFilter` deep-link);
   no per-account hover actions, no 5h-window remaining, no status dot anymore.
-  Plus a header (missing-CLI warning, Quit) + footer (Tasks · History ·
-  Settings); pure logic (`upcomingEvents`, `emptyState`, `eventName`, and the
-  retained `scheduledAccounts` — which still feeds
-  `AppEnvironment.refreshWindowEnds` for the bar glyph; `nextEvent` was
-  removed) lives in `MenuPanelLogic.swift`, testable without UI. Replaces the
-  old native menu (`MenuContent.swift`). `SettingsView.swift`
-  (sidebar: Contas · Tarefas · Histórico · Geral — the `horarios`
-  case/rawValue is unchanged for persistence, only its displayed title
-  changed from "Horários" to "Tarefas"/"Tasks") →
+  Plus a header (missing-CLI warning, Quit) + footer (Schedules · History ·
+  Settings); pure logic (`upcomingEvents`, `emptyState`, `eventName`) lives in
+  `MenuPanelLogic.swift`, testable without UI. Replaces the old native menu
+  (`MenuContent.swift`). `AppWindowActions` temporarily adopts regular
+  activation while a standard window is visible, then returns to accessory
+  mode; `OhayoCommands` preserves `⌘,` for Geral/General. `SettingsView.swift`
+  (central Ohayo window sidebar: Agendamentos · Contas · Histórico · Geral;
+  the `horarios` case/rawValue is unchanged for persistence, only its displayed
+  title is Agendamentos/Schedules) →
   `ContasView` (per-account pause/resume now lives here, alongside
   provider/folder/active-schedule count),
   `HorariosView` (unified agendamento list: fixed header bar with summary ·
@@ -206,6 +216,8 @@ swift test                      # full suite
 swift test --filter <Class>     # focused
 swift run Ohayo                 # run the menu bar app locally
 ./scripts/make-app.sh           # build/Ohayo.app (ad-hoc unless Developer ID env is set)
+./scripts/make-dev-app.sh       # build/Ohayo Dev.app with isolated runtime identity
+open "build/Ohayo Dev.app" --args --ui-testing # expose central window for Computer Use
 ./scripts/make-dmg.sh           # build/Ohayo-<version>.dmg
 ```
 
@@ -259,12 +271,10 @@ log stream --predicate 'subsystem == "io.github.hayashirafael.Ohayo"' --level de
 commit them (they are gitignored). Do not add session trailers or AI-process
 footers to commits or PRs in this repo.
 
-## Release prompt
+## Release flow
 
-After any code, documentation, workflow, packaging, or cask change in this repo,
-ask the user whether to create a new release before finishing the task.
-
-If the answer is yes, use the existing release flow:
+Do not create or propose a release for a narrow commit/push request. Create one
+only when the user explicitly requests it, using the existing flow:
 
 1. Confirm the next semantic version.
 2. Update `scripts/Info.plist` if the app version changes.

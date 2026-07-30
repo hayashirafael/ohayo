@@ -9,13 +9,13 @@ struct OhayoApp: App {
     /// Vive pelo processo inteiro: o kernel solta o flock quando ele morre.
     private static let runtimeProfile = AppRuntimeProfile.current
     private static let instanceLock = SingleInstanceLock(profile: runtimeProfile)
+    private static let exposesMainWindowForUITesting =
+        AppWindowActions.shouldExposeMainWindowForUITesting(
+            profile: runtimeProfile,
+            arguments: ProcessInfo.processInfo.arguments
+        )
 
     init() {
-        let exposesUITestingWindow =
-            AppWindowActions.shouldOpenSettingsForUITesting(
-                profile: Self.runtimeProfile,
-                arguments: ProcessInfo.processInfo.arguments
-            )
         _updater = StateObject(
             wrappedValue: AppUpdater(profile: Self.runtimeProfile)
         )
@@ -34,12 +34,7 @@ struct OhayoApp: App {
             alert.runModal()
             exit(0)
         }
-        NSApplication.shared.setActivationPolicy(
-            exposesUITestingWindow ? .regular : .accessory
-        )
-        if exposesUITestingWindow {
-            AppWindowActions.openSettings()
-        }
+        NSApplication.shared.setActivationPolicy(.accessory)
     }
 
     var body: some Scene {
@@ -50,22 +45,21 @@ struct OhayoApp: App {
                 .background {
                     StartupCoordinatorView(
                         state: env.state,
-                        isBundled: Bundle.main.bundleIdentifier != nil
+                        isBundled: Bundle.main.bundleIdentifier != nil,
+                        exposesMainWindowForUITesting:
+                            Self.exposesMainWindowForUITesting
                     )
                 }
         }
         .menuBarExtraStyle(.window)
 
         Window(Self.runtimeProfile.displayName, id: "schedule") {
-            SettingsView(state: env.state, env: env)
+            SettingsView(state: env.state, env: env, updater: updater)
         }
         .defaultSize(width: 820, height: 600)
         .windowResizability(.contentMinSize)
-
-        Settings {
-            GeneralTab(state: env.state, updater: updater)
-                .frame(width: 620)
-                .frame(minHeight: 430)
+        .commands {
+            OhayoCommands(state: env.state)
         }
 
         Window(env.state.strings.permissionGuideTitle, id: "permissions") {

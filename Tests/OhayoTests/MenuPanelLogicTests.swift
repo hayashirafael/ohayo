@@ -16,20 +16,6 @@ final class MenuPanelLogicTests: XCTestCase {
         return t
     }
 
-    // MARK: - scheduledAccounts
-
-    func testContasComAgendamentoHabilitadoOrdenadasPorLabel() {
-        let t1 = task(repetition: .continuous)
-        let t2 = task(repetition: .fixed)
-        let t3 = task(repetition: .fixed, enabled: false)
-        let dirs = [t1.uid: contaB, t2.uid: contaA, t3.uid: contaA]
-        let result = MenuPanelLogic.scheduledAccounts(
-            tasks: [t1, t2, t3],
-            accountDir: { dirs[$0.uid] },
-            label: { $0 == self.contaA ? "alpha" : "beta" })
-        XCTAssertEqual(result, [contaA, contaB]) // ordena por label, sem duplicar
-    }
-
     // MARK: - eventName
 
     func testNomeExplicitoVence() {

@@ -80,16 +80,10 @@ struct MenuPanel: View {
             }
             Spacer()
             Menu {
-                if #available(macOS 14.0, *) {
-                    NativeAppSettingsButton(closePanel: closePanel) {
-                        Label(strings.settingsShort, systemImage: "gearshape")
-                    }
-                } else {
-                    Button {
-                        openSettingsFallback()
-                    } label: {
-                        Label(strings.settingsShort, systemImage: "gearshape")
-                    }
+                Button {
+                    open(.geral, filter: nil)
+                } label: {
+                    Label(strings.settingsShort, systemImage: "gearshape")
                 }
                 Button {
                     openPermissions()
@@ -374,24 +368,10 @@ struct MenuPanel: View {
         HStack(spacing: 7) {
             footerButton("checklist", strings.schedules) { open(.horarios, filter: nil) }
             footerButton("clock.arrow.circlepath", strings.history) { open(.historico, filter: nil) }
-            settingsFooterButton
+            footerButton("gearshape", strings.settingsShort) { open(.geral, filter: nil) }
         }
         .padding(.top, 3)
         .overlay(alignment: .top) { Divider().offset(y: -3) }
-    }
-
-    @ViewBuilder
-    private var settingsFooterButton: some View {
-        if #available(macOS 14.0, *) {
-            NativeAppSettingsButton(closePanel: closePanel) {
-                footerButtonLabel("gearshape", strings.settingsShort)
-            }
-            .buttonStyle(.plain)
-        } else {
-            footerButton("gearshape", strings.settingsShort) {
-                openSettingsFallback()
-            }
-        }
     }
 
     private func footerButton(_ symbol: String, _ title: String,
@@ -416,42 +396,22 @@ struct MenuPanel: View {
     private func open(_ section: SettingsSection, filter: URL?) {
         state.accountFilter = filter
         state.settingsSection = section
-        openWindow(id: "schedule")
-        NSApp.activate(ignoringOtherApps: true)
-        closePanel()
-    }
-
-    private func openSettingsFallback() {
-        closePanel()
-        AppWindowActions.openSettings()
+        AppWindowActions.presentWindow(
+            closePanel: closePanel,
+            openWindow: { openWindow(id: "schedule") }
+        )
     }
 
     private func openPermissions() {
-        openWindow(id: "permissions")
-        NSApp.activate(ignoringOtherApps: true)
-        closePanel()
+        AppWindowActions.presentWindow(
+            closePanel: closePanel,
+            openWindow: { openWindow(id: "permissions") }
+        )
     }
 
     /// O painel .window do MenuBarExtra não fecha sozinho ao abrir outra
     /// janela — fecha a janela do próprio painel explicitamente.
     private func closePanel() {
-        NSApp.windows.first { $0.className.contains("MenuBarExtraWindow") }?.close()
-    }
-}
-
-@available(macOS 14.0, *)
-private struct NativeAppSettingsButton<Label: View>: View {
-    @Environment(\.openSettings) private var openSettings
-
-    let closePanel: () -> Void
-    @ViewBuilder let label: () -> Label
-
-    var body: some View {
-        Button {
-            openSettings()
-            closePanel()
-        } label: {
-            label()
-        }
+        AppWindowActions.closeMenuBarPanel()
     }
 }

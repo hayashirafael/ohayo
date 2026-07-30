@@ -2,9 +2,10 @@
 
 [English](README.md) | **Português**
 
-App de menu bar para macOS que mantém as janelas de uso de 5h do seu plano
-Claude sempre abertas — por conta, automaticamente. Swift + SwiftUI
-(`MenuBarExtra`), com Sparkle para atualizações seguras dentro do app.
+Centro de automações na barra de menus do macOS para Claude, Codex e comandos
+shell. Ele pode encadear as janelas de uso de 5h compatíveis por conta e
+executar Agendamentos automaticamente. Swift + SwiftUI (`MenuBarExtra`), com
+Sparkle para atualizações seguras dentro do app.
 
 ## Por quê
 
@@ -12,9 +13,9 @@ Os planos Claude (Pro/Max) abrem uma janela de uso de 5h a partir do primeiro
 prompt. Quem usa pesado quer a janela já aberta na hora de sentar para
 trabalhar — não gastar a primeira hora dela aquecendo. O Ohayo encadeia as
 janelas de cada conta, e um Agendamento contínuo nunca executa de forma
-redundante enquanto já existe uma janela ativa: ele detecta a janela corrente
-passivamente pelos transcripts locais do Claude Code, sem nenhuma chamada de
-rede própria.
+redundante enquanto já existe uma janela ativa. O detector lê passivamente os
+transcripts locais do Claude/Codex sem chamar APIs dos provedores; o Sparkle
+consulta separadamente o GitHub para buscar atualizações assinadas do app.
 
 ## Recursos
 
@@ -31,7 +32,7 @@ rede própria.
   modo batch
 - **Multi-conta, Claude e Codex** — as pastas padrão (`~/.claude`, `~/.codex`)
   são detectadas automaticamente quando existem; outras pastas `~/.claude*`
-  entram uma única vez, no primeiro launch, e daí em diante novas contas são
+  entram uma única vez, na primeira abertura, e daí em diante novas contas são
   adicionadas a qualquer momento via "Adicionar conta…" — mostra o e-mail
   logado, aceita apelidos
 - **Histórico** — disparos recentes com status e resposta expansível (log
@@ -44,7 +45,7 @@ rede própria.
 - **Provider Doctor** — verificações somente leitura, na primeira abertura, da
   instalação das CLIs e do login de cada conta Claude/Codex configurada; nunca
   executa prompt nem consome cota
-- **Idioma** — inglês por padrão, com opção para português nos Ajustes
+- **Idioma** — inglês por padrão, com opção para português em **Geral**
 - **Atualizações dentro do app** — consulta automaticamente o feed assinado
   das releases no GitHub; instala e reinicia sem download manual do DMG
 - **Pausar/Retomar** por conta, em **Contas**, e **Iniciar com o Mac**
@@ -52,8 +53,8 @@ rede própria.
 
 ## Requisitos
 
-- macOS 13+ (o binário v1.1.1 publicado atualmente exige Apple Silicon; a
-  próxima release gerada por esta revisão será universal)
+- macOS 13+; as releases publicadas desde a v1.2.0 são universais para Apple
+  Silicon e Intel
 - [Claude Code](https://claude.com/claude-code) instalado e logado (somente
   se você usar Agendamentos Claude)
 - [Codex CLI](https://github.com/openai/codex) instalado e logado (opcional,
@@ -76,24 +77,23 @@ brew trust --cask hayashirafael/tap/ohayo
 brew install --cask ohayo
 ```
 
-O Ohayo deve ser instalado de forma limpa. Remova completamente qualquer
-instalação anterior antes de instalar a primeira versão com Sparkle. Depois
-dessa instalação-bootstrap, as próximas releases podem ser instaladas em
-**Ajustes… → Sobre → Buscar atualizações…**.
+O Homebrew instala a release publicada mais recente. Instalações anteriores à
+v1.2.0 precisam de um último `brew upgrade --cask ohayo`; depois disso, as
+próximas releases também podem ser instaladas em **Ohayo → Geral → Sobre →
+Buscar atualizações…**.
 
 ### DMG
 
 Baixe o `Ohayo-<versão>.dmg` da [última release](../../releases/latest) e
 arraste o **Ohayo** para **Applications**.
 
-> O artefato v1.1.1 publicado atualmente funciona somente em Apple Silicon. A
-> distribuição gratuita para testers a partir da v1.2.0 é universal para Apple
-> Silicon e Intel, assinada ad-hoc e não notarizada. Na primeira abertura, o
-> Gatekeeper pode exigir clicar com o botão direito no app e escolher **Abrir**
-> ou usar **Ajustes do Sistema → Privacidade e Segurança → Abrir Assim Mesmo**.
-> Quando todas as credenciais Apple forem configuradas, o mesmo workflow passa
-> automaticamente a usar Developer ID, hardened runtime, notarização e
-> stapling.
+> As releases publicadas desde a v1.2.0 são universais para Apple Silicon e
+> Intel. A distribuição gratuita atual para testers é assinada ad-hoc e não
+> notarizada. Na primeira abertura, o Gatekeeper pode exigir clicar com o botão
+> direito no app e escolher **Abrir** ou usar **Ajustes do Sistema → Privacidade
+> e Segurança → Abrir Assim Mesmo**. Quando todas as credenciais Apple forem
+> configuradas, o mesmo workflow passa automaticamente a usar Developer ID,
+> hardened runtime, notarização e stapling.
 
 ### A partir do código
 
@@ -115,7 +115,7 @@ orca computer get-app-state --app io.github.hayashirafael.Ohayo.dev --json
 ```
 
 Se o Computer Use não conseguir inspecionar diretamente a superfície da menu
-bar, exponha a janela normal de Ajustes no canal de desenvolvimento:
+bar, exponha a janela central do app no canal de desenvolvimento:
 
 ```bash
 open "build/Ohayo Dev.app" --args --ui-testing
@@ -129,10 +129,10 @@ agendamentos, histórico ou preferências do app de produção.
 
 ### Atualizações
 
-A versão 1.2.0 é o bootstrap do atualizador. Instalações anteriores, ainda sem
-Sparkle, precisam desta última atualização manual via Homebrew/DMG. A partir da
-1.2.0, o Ohayo consulta diariamente o feed assinado e oferece **Instalar e
-reiniciar** dentro do app. Use **Ajustes… → Sobre → Buscar atualizações…** para
+A versão 1.2.0 introduziu o atualizador. Instalações ainda sem Sparkle precisam
+de uma última atualização manual via Homebrew/DMG. Releases a partir da v1.2.0
+consultam diariamente o feed assinado e oferecem **Instalar e reiniciar**
+dentro do app. Use **Ohayo → Geral → Sobre → Buscar atualizações…** para
 verificar imediatamente.
 
 Mesmo no modo gratuito para testers, os arquivos de atualização e o feed são
@@ -141,12 +141,24 @@ ID e notarização da Apple ficam intencionalmente para depois; até lá, a prim
 instalação não tem a confiança do Gatekeeper. O workflow de release publica
 juntos o DMG final e seu `appcast.xml` assinado.
 
+## Primeiros passos
+
+1. Abra o Ohayo e conclua ou feche o guia inicial não bloqueante.
+2. Em **Contas**, confirme as contas Claude/Codex que deseja usar.
+3. Em **Agendamentos**, escolha **Novo Agendamento…** e configure o Comando.
+4. Selecione **Contínua** para encadear Janelas de uso detectadas ou **Horários
+   fixos** para horários e dias da semana específicos.
+5. Use o painel da barra de menus para os próximos Disparos e o **Histórico**
+   para resultados e detalhes capturados das falhas.
+
 ## Uso
 
-O Ohayo vive na menu bar (sem ícone no Dock). O ícone fica preenchido
-enquanto alguma conta tem janela ativa, mostra `!` em erro e esmaece quando
-todas as contas agendadas estão pausadas; opcionalmente mostra também o tempo
-até a próxima janela vencer entre elas.
+O Ohayo vive na barra de menus, sem ícone permanente no Dock. O macOS exibe um
+ícone no Dock apenas enquanto uma janela padrão do Ohayo está aberta, para que
+ela possa receber foco. O ícone da barra de menus fica preenchido enquanto
+alguma conta tem janela ativa, mostra `!` em erro e esmaece quando todas as
+contas agendadas estão pausadas; opcionalmente mostra também o tempo até a
+próxima janela vencer entre elas.
 
 Clicar no ícone abre um painel com os próximos disparos agendados entre todas as
 contas — quantos, é configurável em **Geral** (1–5, padrão 1) — ordenados
@@ -161,8 +173,8 @@ ausente vira um aviso acionável de configuração; **Ajustes…**,
 **Permissões…** e **Sair do Ohayo** ficam agrupados no menu de ações
 secundárias.
 
-A janela operacional **Ohayo** abre em **Agendamentos** e tem uma sidebar com
-três seções:
+A janela central **Ohayo** abre em **Agendamentos** e tem uma sidebar com
+quatro seções:
 
 - **Contas** — por conta, a identidade logada / apelido, o provedor com seu
   ícone, a pasta local, quantos agendamentos ativos miram a conta, e
@@ -174,25 +186,23 @@ três seções:
   edita qualquer um deles; novos Agendamentos começam com o campo de Comando
   vazio. Entrar por um Agendamento no painel do menu filtra essa lista para a
   conta, com um chip para limpar o filtro
-- **Skill (opcional):** em Agendamentos Claude/Codex, escolha uma skill da
-  conta, do usuário ou do repositório selecionado. O Ohayo resolve skills da
-  conta/plugins Claude e `.claude/skills` nos ancestrais; para Codex, resolve
-  também `$HOME/.agents/skills`, `.agents/skills` nos ancestrais e as skills
-  dos plugins que a conta selecionada declara instalados e habilitados em
-  `codex plugin list --json`. A consulta é somente leitura e nunca executa um
-  prompt. Cada Disparo prefixa a skill ao Comando (`/skill comando` no Claude,
-  `$skill comando` no Codex). Selecionar uma skill carrega as customizações
-  do Claude; a UI deixa claro que isso amplia o contexto e não é sandbox de
-  filesystem
+  - **Skill opcional:** em Agendamentos Claude/Codex, escolha uma skill da
+    conta, do usuário ou do repositório selecionado. O Ohayo resolve skills da
+    conta/plugins Claude e `.claude/skills` nos ancestrais; para Codex, resolve
+    também `$HOME/.agents/skills`, `.agents/skills` nos ancestrais e as skills
+    dos plugins que a conta selecionada declara instalados e habilitados em
+    `codex plugin list --json`. A consulta é somente leitura e nunca executa um
+    prompt. Cada Disparo prefixa a skill ao Comando (`/skill comando` no
+    Claude, `$skill comando` no Codex). Selecionar uma skill carrega as
+    customizações do Claude; a UI deixa claro que isso amplia o contexto e não
+    é sandbox de filesystem
 - **Histórico** — disparos recentes em cards com status, ícone do provedor,
   modelo, apelido/e-mail da conta, comando, resposta e detalhes de erro;
   filtrável por conta do mesmo jeito que Agendamentos
-
-As preferências gerais ficam na janela nativa **Ajustes…**, separadas da
-sidebar operacional: Iniciar com o Mac, tempo restante na barra de menus,
-detalhes sensíveis nas notificações (desligados por padrão), quantos próximos
-Disparos o painel mostra (1–5), Idioma, acesso ao sistema, a versão do app e
-**Buscar atualizações…**.
+- **Geral** — Iniciar com o Mac, tempo restante na barra de menus, detalhes
+  sensíveis nas notificações (desligados por padrão), quantos próximos Disparos
+  o painel mostra (1–5), Idioma, acesso ao sistema, a versão do app e **Buscar
+  atualizações…**. Abra por **Ajustes…** ou com `⌘,`
 
 ### Permissões na primeira abertura
 
@@ -203,7 +213,7 @@ leitura: nunca executam prompt, iniciam login ou consomem cota. Nele você tamb�
 pode permitir notificações, testar a automação do Terminal usada nas sessões
 interativas e, opcionalmente, ativar **Iniciar com o Mac**. Fechar o guia não
 desativa o app; reabra-o pelo menu de ações secundárias do painel ou em
-**Ajustes… → Acesso ao Sistema → Permissões…**.
+**Ohayo → Geral → Acesso ao Sistema → Permissões…**.
 
 Se notificações ou automação do Terminal forem negadas, altere-as em **Ajustes
 do Sistema → Notificações → Ohayo** ou **Ajustes do Sistema → Privacidade e

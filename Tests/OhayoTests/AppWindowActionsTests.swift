@@ -3,40 +3,45 @@ import XCTest
 
 @MainActor
 final class AppWindowActionsTests: XCTestCase {
-    func testUITestingArgumentOpensSettingsOnlyInDevelopment() {
-        XCTAssertTrue(AppWindowActions.shouldOpenSettingsForUITesting(
+    func testUITestingArgumentExposesMainWindowOnlyInDevelopment() {
+        XCTAssertTrue(AppWindowActions.shouldExposeMainWindowForUITesting(
             profile: .development,
             arguments: ["Ohayo", "--ui-testing"]
         ))
-        XCTAssertFalse(AppWindowActions.shouldOpenSettingsForUITesting(
+        XCTAssertFalse(AppWindowActions.shouldExposeMainWindowForUITesting(
             profile: .production,
             arguments: ["Ohayo", "--ui-testing"]
         ))
-        XCTAssertFalse(AppWindowActions.shouldOpenSettingsForUITesting(
+        XCTAssertFalse(AppWindowActions.shouldExposeMainWindowForUITesting(
             profile: .development,
             arguments: ["Ohayo"]
         ))
     }
 
-    func testOpenSettingsDefersResponderActionUntilNextRunLoop() {
+    func testPresentWindowClosesPanelAndOpensBeforeDeferredActivation() {
         var events: [String] = []
         var deferredAction: (@MainActor () -> Void)?
 
-        AppWindowActions.openSettings(
+        AppWindowActions.presentWindow(
+            closePanel: {
+                events.append("close")
+            },
+            prepareForPresentation: {
+                events.append("prepare")
+            },
+            openWindow: {
+                events.append("open")
+            },
             deferToNextRunLoop: { action in
                 events.append("defer")
                 deferredAction = action
             },
             activate: {
                 events.append("activate")
-            },
-            sendAction: { selectorName in
-                events.append("send:\(selectorName)")
-                return selectorName == "showSettingsWindow:"
             }
         )
 
-        XCTAssertEqual(events, ["defer"])
+        XCTAssertEqual(events, ["close", "prepare", "open", "defer"])
 
         let action = deferredAction
         deferredAction = nil
@@ -44,7 +49,7 @@ final class AppWindowActionsTests: XCTestCase {
 
         XCTAssertEqual(
             events,
-            ["defer", "activate", "send:showSettingsWindow:"]
+            ["close", "prepare", "open", "defer", "activate"]
         )
     }
 }
