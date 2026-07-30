@@ -426,8 +426,8 @@ struct L10n {
     }
     var showResponseDescription: String {
         text(
-            en: "Runs in background and saves the response in History.",
-            pt: "Executa em segundo plano e salva a resposta no Histórico."
+            en: "Runs in background, saves a file, and keeps the response in History.",
+            pt: "Executa em segundo plano, salva um arquivo e mantém a resposta no Histórico."
         )
     }
     var runInTerminalDescription: String {
@@ -460,6 +460,42 @@ struct L10n {
     var safeMode: String {
         text(en: "Ignore Claude customizations (not a sandbox)",
              pt: "Ignorar customizações do Claude (não é sandbox)")
+    }
+    var codexAllowFullAccess: String {
+        text(
+            en: "Allow full access (prevents approval pauses)",
+            pt: "Permitir acesso total (evita pausas para aprovação)"
+        )
+    }
+    var codexAllowFullAccessHelp: String {
+        text(
+            en: "Runs Codex without sandbox or approval prompts. Disable it for read-only execution.",
+            pt: "Executa o Codex sem sandbox nem pedidos de aprovação. Desative para execução somente leitura."
+        )
+    }
+    var responseFileFormat: String {
+        text(en: "Response file", pt: "Arquivo da resposta")
+    }
+    var plainTextFile: String {
+        text(en: "Plain text (.txt)", pt: "Texto simples (.txt)")
+    }
+    var chooseResponseDirectory: String {
+        text(
+            en: "Choose a folder for response files",
+            pt: "Escolher pasta para os arquivos de resposta"
+        )
+    }
+    var favoriteResponseDirectory: String {
+        text(
+            en: "Favorite this folder",
+            pt: "Favoritar esta pasta"
+        )
+    }
+    var favoriteResponseDirectories: String {
+        text(
+            en: "Favorite response folders",
+            pt: "Pastas favoritas de resposta"
+        )
     }
     var skillLabel: String {
         text(en: "Skill (expands context)", pt: "Skill (amplia o contexto)")
@@ -618,6 +654,18 @@ struct L10n {
     var historyAccountDefaultModel: String { text(en: "Account default", pt: "Padrão da conta") }
     var historyResponse: String { text(en: "Response", pt: "Resposta") }
     var historyDetails: String { text(en: "Details", pt: "Detalhes") }
+    func revealResponseFile(_ path: String) -> String {
+        text(
+            en: "Show response file: \(path)",
+            pt: "Mostrar arquivo da resposta: \(path)"
+        )
+    }
+    func responseFileSaveFailed(_ detail: String) -> String {
+        text(
+            en: "The response stayed in History, but the file could not be saved: \(detail)",
+            pt: "A resposta ficou no Histórico, mas o arquivo não pôde ser salvo: \(detail)"
+        )
+    }
     var clearHistory: String { text(en: "Clear history", pt: "Limpar histórico") }
     var clearHistoryConfirmationTitle: String {
         text(en: "Clear all history?", pt: "Limpar todo o histórico?")

@@ -67,6 +67,8 @@ struct ClaudeConfigForm: View {
 struct CodexConfigForm: View {
     @Binding var model: String
     @Binding var reasoning: Message.CodexReasoning?
+    @Binding var allowFullAccess: Bool
+    let availableModels: [CodexModelOption]
     @Binding var configDir: String?
     @Binding var skill: String?
     let availableSkills: [SkillRef]
@@ -76,17 +78,48 @@ struct CodexConfigForm: View {
     let strings: L10n
     var showsAccount = true
 
+    private var selectedModel: CodexModelOption? {
+        availableModels.first { $0.slug == model }
+    }
+
+    private var availableReasoning: [Message.CodexReasoning] {
+        let base: [Message.CodexReasoning]
+        if let selectedModel {
+            base = selectedModel.supportedReasoning
+        } else {
+            base = availableModels.reduce(into: []) { result, option in
+                for effort in option.supportedReasoning
+                where !result.contains(effort) {
+                    result.append(effort)
+                }
+            }
+        }
+        guard let reasoning, !base.contains(reasoning) else { return base }
+        return base + [reasoning]
+    }
+
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 7) {
             GridRow {
                 ConfigRowLabel(strings.model)
-                TextField(strings.accountDefaultModel, text: $model)
+                Picker("", selection: $model) {
+                    Text(strings.accountDefaultModel).tag("")
+                    ForEach(availableModels) { option in
+                        Text(option.displayName).tag(option.slug)
+                    }
+                    if !model.isEmpty, selectedModel == nil {
+                        Text(model).tag(model)
+                    }
+                }
+                .labelsHidden()
+                .accessibilityLabel(strings.model)
+                .help(selectedModel?.description ?? "")
             }
             GridRow {
                 ConfigRowLabel(strings.reasoning)
                 Picker("", selection: $reasoning) {
                     Text(strings.accountDefaultReasoning).tag(Message.CodexReasoning?.none)
-                    ForEach(Message.CodexReasoning.allCases, id: \.self) {
+                    ForEach(availableReasoning, id: \.self) {
                         Text($0.rawValue).tag(Message.CodexReasoning?.some($0))
                     }
                 }
@@ -111,8 +144,24 @@ struct CodexConfigForm: View {
                 ConfigRowLabel("")
                 WorkingDirectoryPicker(workingDir: $workingDir, strings: strings)
             }
+            GridRow {
+                ConfigRowLabel("")
+                Toggle(
+                    strings.codexAllowFullAccess,
+                    isOn: $allowFullAccess
+                )
+                .toggleStyle(.checkbox)
+                .help(strings.codexAllowFullAccessHelp)
+            }
         }
         .font(.caption)
+        .onChange(of: model) { newModel in
+            reasoning = CodexModelCatalog.normalizedReasoning(
+                reasoning,
+                for: newModel,
+                in: availableModels
+            )
+        }
     }
 }
 

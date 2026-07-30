@@ -17,6 +17,7 @@ final class FireController {
     private let terminalLauncher: TerminalLaunching?
     private let authenticationChecker: AuthenticationChecking
     private let notifier: Notifying
+    private let responseFileWriter: ResponseFileWriting
     private let clock: Clock
     private let preparer: DispatchPreparer
     /// Execuções da mesma conta são serializadas; contas diferentes podem
@@ -52,13 +53,16 @@ final class FireController {
          terminalLauncher: TerminalLaunching? = nil,
          notifier: Notifying, clock: Clock = SystemClock(),
          authenticationChecker: AuthenticationChecking = AllowAllAuthenticationChecker(),
-         preparer: DispatchPreparer? = nil) {
+         preparer: DispatchPreparer? = nil,
+         responseFileWriter: ResponseFileWriting =
+             SystemResponseFileWriter()) {
         self.state = state
         self.detector = detector
         self.runner = runner
         self.terminalLauncher = terminalLauncher
         self.authenticationChecker = authenticationChecker
         self.notifier = notifier
+        self.responseFileWriter = responseFileWriter
         self.clock = clock
         self.preparer = preparer ?? DispatchPreparer(
             homeDirectory: state.dispatchHomeDirectory
@@ -244,9 +248,32 @@ final class FireController {
             }
             let response = message.resolvedShowResponse && !output.isEmpty
                 ? String(output.prefix(Self.responseLimit)) : nil
+            var responseFilePath: String?
+            var responseFileError: String?
+            let responseFileFormat = response.map {
+                _ in message.resolvedResponseFileFormat
+            }
+            if response != nil {
+                let directory = responseDirectory(for: message)
+                switch await responseFileWriter.write(
+                    response: output,
+                    format: message.resolvedResponseFileFormat,
+                    directory: directory,
+                    taskName: taskName,
+                    date: clock.now
+                ) {
+                case .success(let file):
+                    responseFilePath = file.standardizedFileURL.path
+                case .failure(.failed(let detail)):
+                    responseFileError = detail
+                }
+            }
             state.recordEvent(state.makeEvent(date: clock.now, result: .success,
                                               message: eventMessage, origin: origin,
-                                              response: response))
+                                              response: response,
+                                              responseFileFormat: responseFileFormat,
+                                              responseFilePath: responseFilePath,
+                                              responseFileError: responseFileError))
             if let response {
                 // A notificação de resposta já comunica o sucesso — não duplica.
                 let content = notificationContent(
@@ -289,6 +316,22 @@ final class FireController {
             outcome = Self.dispatchOutcome(for: error)
         }
         return outcome
+    }
+
+    private func responseDirectory(for message: Message) -> URL {
+        guard let path = message.responseDirectory,
+              !path.trimmingCharacters(
+                  in: .whitespacesAndNewlines
+              ).isEmpty else {
+            return AppPaths.responsesDirectory(
+                home: state.dispatchHomeDirectory
+            )
+        }
+        return URL(
+            fileURLWithPath:
+                NSString(string: path).expandingTildeInPath,
+            isDirectory: true
+        ).standardizedFileURL
     }
 
     private static func scheduledSnapshot(

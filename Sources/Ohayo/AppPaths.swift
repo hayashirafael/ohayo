@@ -15,4 +15,10 @@ enum AppPaths {
     ) -> URL {
         supportDirectory(home: home).appendingPathComponent("workspace")
     }
+
+    static func responsesDirectory(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        home.appendingPathComponent("Documents/Ohayo")
+    }
 }

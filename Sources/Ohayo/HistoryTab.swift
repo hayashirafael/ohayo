@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private enum HistoryStatusFilter: String, CaseIterable, Identifiable {
@@ -68,6 +69,9 @@ struct HistoryTab: View {
         let modelName: String?
         let aliasSnapshot: String?
         let emailSnapshot: String?
+        let responseFileFormat: String?
+        let responseFilePath: String?
+        let responseFileError: String?
 
         init(_ event: FireEvent) {
             date = event.date
@@ -81,6 +85,9 @@ struct HistoryTab: View {
             modelName = event.modelName
             aliasSnapshot = event.aliasSnapshot
             emailSnapshot = event.emailSnapshot
+            responseFileFormat = event.responseFileFormat?.rawValue
+            responseFilePath = event.responseFilePath
+            responseFileError = event.responseFileError
         }
     }
 
@@ -242,6 +249,8 @@ struct HistoryTab: View {
             identity.email,
             identity.provider?.displayName,
             identity.modelName,
+            event.responseFilePath,
+            event.responseFileError,
         ]
         .compactMap { $0 }
         .joined(separator: "\n")
@@ -312,11 +321,11 @@ struct HistoryTab: View {
 
             if let response = event.response, !response.isEmpty {
                 DisclosureGroup(responseTitle(event)) {
-                    Text(response)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 5)
+                    VStack(alignment: .leading, spacing: 8) {
+                        responseContent(response, event: event)
+                        responseFileStatus(event)
+                    }
+                    .padding(.top, 5)
                 }
                 .font(.caption)
             }
@@ -326,6 +335,55 @@ struct HistoryTab: View {
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(.separator.opacity(0.65), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func responseContent(
+        _ response: String,
+        event: FireEvent
+    ) -> some View {
+        if event.responseFileFormat == .markdown {
+            Text(
+                MarkdownResponseFormatter.attributedString(response)
+            )
+            .font(.caption)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text(response)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func responseFileStatus(_ event: FireEvent) -> some View {
+        if let path = event.responseFilePath, !path.isEmpty {
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([
+                    URL(fileURLWithPath: path),
+                ])
+            } label: {
+                Label(
+                    strings.revealResponseFile(
+                        (path as NSString).abbreviatingWithTildeInPath
+                    ),
+                    systemImage: "doc"
+                )
+            }
+            .buttonStyle(.link)
+            .font(.caption2)
+            .help(path)
+        } else if let error = event.responseFileError, !error.isEmpty {
+            Label(
+                strings.responseFileSaveFailed(error),
+                systemImage: "exclamationmark.triangle"
+            )
+            .font(.caption2)
+            .foregroundStyle(.orange)
+            .textSelection(.enabled)
         }
     }
 

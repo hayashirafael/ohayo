@@ -400,7 +400,11 @@ final class TerminalLauncherTests: XCTestCase {
         XCTAssertTrue(spec.terminalScript.contains("cd '/tmp/proj'"))
         XCTAssertTrue(spec.terminalScript.contains("'/tmp/fake-codex'"))
         XCTAssertTrue(spec.terminalScript.contains("'--model' 'gpt-5.5'"))
-        XCTAssertTrue(spec.terminalScript.contains("'--sandbox' 'read-only'"))
+        XCTAssertTrue(
+            spec.terminalScript.contains(
+                "'--dangerously-bypass-approvals-and-sandbox'"
+            )
+        )
         XCTAssertTrue(spec.terminalScript.contains("'-c' 'model_reasoning_effort=\"high\"'"))
         XCTAssertTrue(spec.terminalScript.contains("'revise isso'"))
         XCTAssertFalse(spec.terminalScript.contains("'exec'"))

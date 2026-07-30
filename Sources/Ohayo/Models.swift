@@ -1,5 +1,17 @@
 import Foundation
 
+enum ResponseFileFormat: String, Codable, CaseIterable {
+    case markdown
+    case plainText
+
+    var fileExtension: String {
+        switch self {
+        case .markdown: return "md"
+        case .plainText: return "txt"
+        }
+    }
+}
+
 enum FireResult: Codable, Equatable {
     case success
     /// A sessão interativa foi aberta no Terminal; o Ohayo não acompanha o
@@ -24,6 +36,9 @@ struct FireEvent: Codable, Equatable {
     var modelName: String? = nil
     var aliasSnapshot: String? = nil
     var emailSnapshot: String? = nil
+    var responseFileFormat: ResponseFileFormat? = nil
+    var responseFilePath: String? = nil
+    var responseFileError: String? = nil
 }
 
 struct EventIdentity: Equatable {
@@ -39,7 +54,9 @@ struct EventIdentity: Equatable {
 struct Message: Codable, Identifiable {
     enum Kind: String, Codable { case claude, shell, codex }
     enum CodexReasoning: String, Codable, CaseIterable {
-        case minimal, low, medium, high, xhigh
+        /// `minimal` é mantido para decodificar agendamentos criados por
+        /// versões anteriores. O catálogo atual da conta decide se ele aparece.
+        case none, minimal, low, medium, high, xhigh, max, ultra
     }
     enum Model: String, Codable, CaseIterable {
         case haiku, sonnet, opus
@@ -76,6 +93,11 @@ struct Message: Codable, Identifiable {
     var notifyOnSuccess: Bool? = nil
     var codexModel: String? = nil
     var codexReasoning: CodexReasoning? = nil
+    /// A automação Codex não consegue apresentar aprovações interativas.
+    /// nil preserva o novo default solicitado: acesso total habilitado.
+    var codexAllowFullAccess: Bool? = nil
+    var responseFileFormat: ResponseFileFormat? = nil
+    var responseDirectory: String? = nil
     /// Skill da conta prefixada ao prompt no disparo (`/skill` no Claude,
     /// `$skill` no Codex). nil/vazia = sem skill. Só Claude/Codex.
     var skill: String? = nil
@@ -91,11 +113,14 @@ struct Message: Codable, Identifiable {
         let timeoutValue = timeoutSeconds.map(String.init) ?? ""
         let notifyOnSuccessValue = notifyOnSuccess.map(String.init) ?? ""
         let reasoningValue = codexReasoning?.rawValue ?? ""
+        let fullAccessValue = codexAllowFullAccess.map(String.init) ?? ""
+        let responseFormatValue = responseFileFormat?.rawValue ?? ""
         let values = [
             kind.rawValue, text, modelValue, effortValue, safeModeValue,
             configDir ?? "", workingDir ?? "", showResponseValue,
             runInTerminalValue, timeoutValue, notifyOnSuccessValue,
-            codexModel ?? "", reasoningValue, skill ?? ""
+            codexModel ?? "", reasoningValue, fullAccessValue,
+            responseFormatValue, responseDirectory ?? "", skill ?? ""
         ]
         return values.joined(separator: "\u{1}")
     }
@@ -111,6 +136,9 @@ extension Message: Equatable {
             && lhs.timeoutSeconds == rhs.timeoutSeconds
             && lhs.notifyOnSuccess == rhs.notifyOnSuccess
             && lhs.codexModel == rhs.codexModel && lhs.codexReasoning == rhs.codexReasoning
+            && lhs.codexAllowFullAccess == rhs.codexAllowFullAccess
+            && lhs.responseFileFormat == rhs.responseFileFormat
+            && lhs.responseDirectory == rhs.responseDirectory
             && lhs.skill == rhs.skill
     }
 }
@@ -150,6 +178,12 @@ extension Message {
     }
     var resolvedShowResponse: Bool { showResponse ?? false }
     var resolvedNotifyOnSuccess: Bool { notifyOnSuccess ?? false }
+    var resolvedCodexAllowFullAccess: Bool {
+        codexAllowFullAccess ?? true
+    }
+    var resolvedResponseFileFormat: ResponseFileFormat {
+        responseFileFormat ?? .markdown
+    }
     var resolvedRunInTerminal: Bool {
         switch kind {
         case .claude, .codex: return runInTerminal ?? true
@@ -206,6 +240,9 @@ struct ScheduledTask: Identifiable, Equatable {
         values.append(message.notifyOnSuccess.map(String.init) ?? "")
         values.append(message.codexModel ?? "")
         values.append(message.codexReasoning?.rawValue ?? "")
+        values.append(message.codexAllowFullAccess.map(String.init) ?? "")
+        values.append(message.responseFileFormat?.rawValue ?? "")
+        values.append(message.responseDirectory ?? "")
         values.append(message.skill ?? "")
         return values.joined(separator: "\u{1}")
     }

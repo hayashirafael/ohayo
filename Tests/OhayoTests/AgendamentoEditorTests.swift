@@ -98,6 +98,33 @@ final class AgendamentoEditorTests: XCTestCase {
         XCTAssertNil(draft.skill)
     }
 
+    func testRespostaEmArquivoPadraoEhMarkdownECodexPermiteTudo() {
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "gere o relatório"
+        draft.kind = .codex
+        draft.outputMode = .response
+
+        let message = draft.normalizedTask().resolvedCommand
+
+        XCTAssertEqual(draft.responseFormat, .markdown)
+        XCTAssertFalse(draft.responseDirectory.isEmpty)
+        XCTAssertEqual(message.responseFileFormat, .markdown)
+        XCTAssertEqual(message.responseDirectory, draft.responseDirectory)
+        XCTAssertTrue(message.resolvedCodexAllowFullAccess)
+    }
+
+    func testOptOutDoAcessoTotalCodexPersiste() {
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "somente leia"
+        draft.kind = .codex
+        draft.codexAllowFullAccess = false
+
+        let message = draft.normalizedTask().resolvedCommand
+
+        XCTAssertEqual(message.codexAllowFullAccess, false)
+        XCTAssertFalse(message.resolvedCodexAllowFullAccess)
+    }
+
     func testContaExplicitaAusenteBloqueiaSaveSemVirarDefault() {
         let state = makeState()
         let editor = AgendamentoEditor(

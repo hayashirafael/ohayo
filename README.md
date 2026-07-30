@@ -25,7 +25,8 @@ app updates.
   active-window evidence) or **Fixed times**
   (times × weekdays). Managed in the **Schedules** section
 - **Configurable commands** — a Claude prompt (model, effort, safe-mode,
-  working directory), a Codex prompt (model, reasoning effort, working
+  working directory), a Codex prompt (models and reasoning efforts discovered
+  from the selected account, full filesystem access on by default, working
   directory), or any shell command — embedded directly in the schedule.
   Claude/Codex prompts open in Terminal.app by default so you can keep
   interacting in the same session; turn that off to run them in batch mode
@@ -34,9 +35,12 @@ app updates.
   dirs are detected once, on first launch, and from then on you add accounts
   anytime via "Add account…" — shows the logged-in email, supports custom
   aliases
-- **History** — recent runs with status and expandable response (the
-  captured stdout/stderr log on failures), including a distinct **Launched**
-  state for interactive Terminal sessions; clear it at any time
+- **History and response files** — recent runs with status and expandable
+  response (Markdown is rendered when selected, while failure stdout/stderr
+  remains available), including a distinct **Launched** state for interactive
+  Terminal sessions. Batch Claude/Codex responses can be saved as `.md`
+  (default) or `.txt` in a chosen folder, with favorite folders available for
+  reuse
 - **Private notifications by default** — macOS notifications hide prompt,
   response, error and account details unless you explicitly enable them in
   **General**
@@ -171,8 +175,8 @@ sections:
     a skill loads Claude customizations; the UI makes clear that this expands
     context and is not a filesystem sandbox
 - **History** — recent runs as cards with status, provider icon, model,
-  account alias/email, command, response and error details; filterable by
-  account the same way as Schedules
+  account alias/email, command, rendered Markdown response, saved-file link
+  and error details; filterable by account the same way as Schedules
 - **General** — Launch at Login, time remaining in the menu bar, sensitive
   notification details (off by default), how many upcoming runs the menu panel
   shows (1–5), Language (English or Portuguese), system access, the app
@@ -239,14 +243,26 @@ External `CLAUDE.md` imports are never pre-approved either; their consent also
 remains visible.
 
 The built-in Claude defaults — Haiku, low effort, ignored customizations and
-`1+1` — provide a minimal command for Continuous Repetition. A batch Codex run launches `codex
-exec [--model <model>] --sandbox read-only [-c
-model_reasoning_effort=<effort>]`; its prompt also comes from stdin. When model
-or reasoning is set to **Account default**, Ohayo omits the corresponding flag
-so `config.toml` wins. Batch timeouts are configurable per schedule: the
+`1+1` — provide a minimal command for Continuous Repetition. Ohayo reads the
+selected Codex account's `models_cache.json` to offer only listed models and
+their supported reasoning efforts, with a current built-in fallback when that
+cache is unavailable. A batch Codex run launches `codex exec [--model <model>]
+--dangerously-bypass-approvals-and-sandbox [-c
+model_reasoning_effort=<effort>]` by default; clearing **Allow full access**
+uses `--sandbox read-only` instead. The same choice applies to interactive
+Terminal sessions, and the prompt always comes from stdin. When model or
+reasoning is set to **Account default**, Ohayo omits the corresponding flag so
+`config.toml` wins.
+
+When **Show response** is enabled for a batch Claude/Codex schedule, the full
+captured response is saved atomically as Markdown (default) or plain text in
+the selected folder; the default is `~/Documents/Ohayo`. Favorite folders are
+stored locally for reuse. History keeps a bounded preview, renders Markdown,
+and links to the saved file. Batch timeouts are configurable per schedule: the
 defaults are 15 minutes for Claude/Codex and 5 minutes for shell, while
-interactive Terminal sessions are not supervised by a timeout. Captured output
-is bounded while preserving both its beginning and error-bearing tail.
+interactive Terminal sessions are not supervised by a timeout. Captured
+process output is bounded while preserving both its beginning and error-bearing
+tail.
 
 Only one Ohayo instance runs at a time. Within it, runs are FIFO per
 provider/account instead of being silently discarded by one global lock;

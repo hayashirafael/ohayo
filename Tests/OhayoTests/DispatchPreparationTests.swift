@@ -31,4 +31,51 @@ final class DispatchPreparationTests: XCTestCase {
             .failure(.continuousShell)
         )
     }
+
+    func testCodexPermiteTudoPorPadraoEmBatchETerminal() {
+        let plan = ProviderDispatchPlan(
+            message: Message(text: "implemente", kind: .codex),
+            account: ProviderAccountContext(
+                provider: .codex,
+                configDirectory: nil
+            )
+        )
+
+        XCTAssertTrue(
+            plan.batchArguments.contains(
+                "--dangerously-bypass-approvals-and-sandbox"
+            )
+        )
+        XCTAssertTrue(
+            plan.terminalArguments.contains(
+                "--dangerously-bypass-approvals-and-sandbox"
+            )
+        )
+        XCTAssertFalse(plan.batchArguments.contains("read-only"))
+        XCTAssertFalse(plan.terminalArguments.contains("read-only"))
+    }
+
+    func testCodexOptOutDePermitirTudoVoltaAoSandboxReadOnly() {
+        let plan = ProviderDispatchPlan(
+            message: Message(
+                text: "analise",
+                kind: .codex,
+                codexAllowFullAccess: false
+            ),
+            account: ProviderAccountContext(
+                provider: .codex,
+                configDirectory: nil
+            )
+        )
+
+        XCTAssertFalse(
+            plan.batchArguments.contains(
+                "--dangerously-bypass-approvals-and-sandbox"
+            )
+        )
+        XCTAssertTrue(plan.batchArguments.contains("--sandbox"))
+        XCTAssertTrue(plan.batchArguments.contains("read-only"))
+        XCTAssertTrue(plan.terminalArguments.contains("--sandbox"))
+        XCTAssertTrue(plan.terminalArguments.contains("read-only"))
+    }
 }

@@ -83,16 +83,16 @@ struct ProviderDispatchPlan: Equatable {
                     "model_reasoning_effort=\"\(reasoning.rawValue)\"",
                 ]
             }
+            let permissionArguments = message.resolvedCodexAllowFullAccess
+                ? ["--dangerously-bypass-approvals-and-sandbox"]
+                : ["--sandbox", "read-only"]
             batchArguments = ["exec"]
                 + modelArguments
-                + [
-                    "--sandbox", "read-only",
-                    "--skip-git-repo-check",
-                    "--color", "never",
-                ]
+                + permissionArguments
+                + ["--skip-git-repo-check", "--color", "never"]
                 + reasoningArguments
             terminalArguments = modelArguments
-                + ["--sandbox", "read-only"]
+                + permissionArguments
                 + reasoningArguments
                 + [message.resolvedPromptText]
         }
