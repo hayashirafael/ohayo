@@ -426,8 +426,14 @@ struct L10n {
     }
     var showResponseDescription: String {
         text(
-            en: "Runs in background and saves the response in History.",
-            pt: "Executa em segundo plano e salva a resposta no Histórico."
+            en: "Runs in background, saves a file, and keeps the response in History.",
+            pt: "Executa em segundo plano, salva um arquivo e mantém a resposta no Histórico."
+        )
+    }
+    var showShellResponseDescription: String {
+        text(
+            en: "Runs in background and keeps the output in History.",
+            pt: "Executa em segundo plano e mantém a saída no Histórico."
         )
     }
     var runInTerminalDescription: String {
@@ -461,6 +467,89 @@ struct L10n {
         text(en: "Ignore Claude customizations (not a sandbox)",
              pt: "Ignorar customizações do Claude (não é sandbox)")
     }
+    var codexAccess: String {
+        text(en: "Access", pt: "Acesso")
+    }
+    func codexAccessMode(_ mode: CodexAccessMode) -> String {
+        switch mode {
+        case .fullAccess:
+            return text(en: "Full access", pt: "Acesso total")
+        case .workspaceWrite:
+            return text(en: "Folder write", pt: "Escrita na pasta")
+        case .readOnly:
+            return text(en: "Read-only", pt: "Somente leitura")
+        }
+    }
+    func codexAccessModeHelp(_ mode: CodexAccessMode) -> String {
+        switch mode {
+        case .fullAccess:
+            return text(
+                en: "Runs without sandbox or approval prompts.",
+                pt: "Executa sem sandbox nem pedidos de aprovação."
+            )
+        case .workspaceWrite:
+            return text(
+                en: "Lets Codex change files only inside the trusted working directory.",
+                pt: "Permite que o Codex altere arquivos apenas dentro da pasta de trabalho confiada."
+            )
+        case .readOnly:
+            return text(
+                en: "Uses a read-only sandbox and does not pre-authorize folder trust.",
+                pt: "Usa um sandbox somente leitura e não pré-autoriza a confiança da pasta."
+            )
+        }
+    }
+    var responseFileFormat: String {
+        text(en: "Response file", pt: "Arquivo da resposta")
+    }
+    var plainTextFile: String {
+        text(en: "Plain text (.txt)", pt: "Texto simples (.txt)")
+    }
+    var markdownFile: String {
+        text(en: "Markdown (.md)", pt: "Markdown (.md)")
+    }
+    var responseFileDefaultName: String {
+        text(en: "response", pt: "resposta")
+    }
+    func codexFallbackModelDescription(_ slug: String) -> String {
+        switch slug {
+        case "gpt-5.6-sol":
+            return text(
+                en: "Latest frontier agentic coding model.",
+                pt: "Modelo agente de programação de última geração."
+            )
+        case "gpt-5.6-terra":
+            return text(
+                en: "Balanced agentic coding model for everyday work.",
+                pt: "Modelo agente de programação equilibrado para o trabalho cotidiano."
+            )
+        case "gpt-5.6-luna":
+            return text(
+                en: "Fast model for clear, repeatable work.",
+                pt: "Modelo rápido para tarefas claras e repetíveis."
+            )
+        default:
+            return ""
+        }
+    }
+    var chooseResponseDirectory: String {
+        text(
+            en: "Choose a folder for response files",
+            pt: "Escolher pasta para os arquivos de resposta"
+        )
+    }
+    var favoriteResponseDirectory: String {
+        text(
+            en: "Favorite this folder",
+            pt: "Favoritar esta pasta"
+        )
+    }
+    var favoriteResponseDirectories: String {
+        text(
+            en: "Favorite response folders",
+            pt: "Pastas favoritas de resposta"
+        )
+    }
     var skillLabel: String {
         text(en: "Skill (expands context)", pt: "Skill (amplia o contexto)")
     }
@@ -483,7 +572,49 @@ struct L10n {
     var codexDefault: String { text(en: "Default (~/.codex)", pt: "Padrão (~/.codex)") }
     var accountDefaultModel: String { text(en: "Model (account default)", pt: "Modelo (padrão da conta)") }
     var workingDirectoryDefault: String {
-        text(en: "Directory (~ by default)", pt: "Diretório (~ por padrão)")
+        text(
+            en: "Directory (Ohayo workspace by default)",
+            pt: "Diretório (workspace do Ohayo por padrão)"
+        )
+    }
+    var workingDirectoryTrustNotice: String {
+        text(
+            en: "Choose the folder where this schedule should run. After choosing, you can let Ohayo request access and pre-authorize project trust.",
+            pt: "Escolha a pasta onde este agendamento deve executar. Depois, você poderá permitir que o Ohayo solicite acesso e pré-autorize o trust do projeto."
+        )
+    }
+    var trustWorkingDirectory: String {
+        text(
+            en: "Trust this folder for Claude",
+            pt: "Confiar nesta pasta para o Claude"
+        )
+    }
+    var trustWorkingDirectoryHelp: String {
+        text(
+            en: "Ohayo requests folder access when you save and avoids the basic Claude project trust prompt in future runs.",
+            pt: "O Ohayo solicita acesso à pasta ao salvar e evita o prompt básico de confiança do projeto Claude nos próximos disparos."
+        )
+    }
+    func workingDirectoryAuthorizationDenied(
+        for kind: Message.Kind
+    ) -> String {
+        switch kind {
+        case .claude:
+            return text(
+                en: "Ohayo could not access this folder. Choose it again and allow access, or turn off Trust this folder for Claude.",
+                pt: "O Ohayo não conseguiu acessar esta pasta. Escolha-a novamente e permita o acesso, ou desative Confiar nesta pasta para o Claude."
+            )
+        case .codex:
+            return text(
+                en: "Ohayo could not access this folder. Choose it again and allow access, or select Read-only access.",
+                pt: "O Ohayo não conseguiu acessar esta pasta. Escolha-a novamente e permita o acesso, ou selecione o acesso Somente leitura."
+            )
+        case .shell:
+            return text(
+                en: "Ohayo could not access this folder. Choose it again and allow access.",
+                pt: "O Ohayo não conseguiu acessar esta pasta. Escolha-a novamente e permita o acesso."
+            )
+        }
     }
     var chooseDirectory: String { text(en: "Choose", pt: "Escolher") }
     var clearWorkingDirectory: String {
@@ -618,6 +749,18 @@ struct L10n {
     var historyAccountDefaultModel: String { text(en: "Account default", pt: "Padrão da conta") }
     var historyResponse: String { text(en: "Response", pt: "Resposta") }
     var historyDetails: String { text(en: "Details", pt: "Detalhes") }
+    func revealResponseFile(_ path: String) -> String {
+        text(
+            en: "Show response file: \(path)",
+            pt: "Mostrar arquivo da resposta: \(path)"
+        )
+    }
+    func responseFileSaveFailed(_ detail: String) -> String {
+        text(
+            en: "The response stayed in History, but the file could not be saved: \(detail)",
+            pt: "A resposta ficou no Histórico, mas o arquivo não pôde ser salvo: \(detail)"
+        )
+    }
     var clearHistory: String { text(en: "Clear history", pt: "Limpar histórico") }
     var clearHistoryConfirmationTitle: String {
         text(en: "Clear all history?", pt: "Limpar todo o histórico?")

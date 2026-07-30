@@ -9,6 +9,7 @@ struct ClaudeConfigForm: View {
     @Binding var skill: String?
     let availableSkills: [SkillRef]
     @Binding var workingDir: String
+    @Binding var trustWorkingDirectory: Bool
     let accounts: [URL]
     let accountLabel: (URL) -> String
     let strings: L10n
@@ -48,7 +49,11 @@ struct ClaudeConfigForm: View {
             SkillPickerRows(skill: $skill, availableSkills: availableSkills, strings: strings)
             GridRow {
                 ConfigRowLabel("")
-                WorkingDirectoryPicker(workingDir: $workingDir, strings: strings)
+                WorkingDirectoryPicker(
+                    workingDir: $workingDir,
+                    trustWorkingDirectory: $trustWorkingDirectory,
+                    strings: strings
+                )
             }
             GridRow {
                 ConfigRowLabel("")
@@ -67,6 +72,8 @@ struct ClaudeConfigForm: View {
 struct CodexConfigForm: View {
     @Binding var model: String
     @Binding var reasoning: Message.CodexReasoning?
+    @Binding var accessMode: CodexAccessMode
+    let availableModels: [CodexModelOption]
     @Binding var configDir: String?
     @Binding var skill: String?
     let availableSkills: [SkillRef]
@@ -76,17 +83,48 @@ struct CodexConfigForm: View {
     let strings: L10n
     var showsAccount = true
 
+    private var selectedModel: CodexModelOption? {
+        availableModels.first { $0.slug == model }
+    }
+
+    private var availableReasoning: [Message.CodexReasoning] {
+        let base: [Message.CodexReasoning]
+        if let selectedModel {
+            base = selectedModel.supportedReasoning
+        } else {
+            base = availableModels.reduce(into: []) { result, option in
+                for effort in option.supportedReasoning
+                where !result.contains(effort) {
+                    result.append(effort)
+                }
+            }
+        }
+        guard let reasoning, !base.contains(reasoning) else { return base }
+        return base + [reasoning]
+    }
+
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 7) {
             GridRow {
                 ConfigRowLabel(strings.model)
-                TextField(strings.accountDefaultModel, text: $model)
+                Picker("", selection: $model) {
+                    Text(strings.accountDefaultModel).tag("")
+                    ForEach(availableModels) { option in
+                        Text(option.displayName).tag(option.slug)
+                    }
+                    if !model.isEmpty, selectedModel == nil {
+                        Text(model).tag(model)
+                    }
+                }
+                .labelsHidden()
+                .accessibilityLabel(strings.model)
+                .help(selectedModel?.description ?? "")
             }
             GridRow {
                 ConfigRowLabel(strings.reasoning)
                 Picker("", selection: $reasoning) {
                     Text(strings.accountDefaultReasoning).tag(Message.CodexReasoning?.none)
-                    ForEach(Message.CodexReasoning.allCases, id: \.self) {
+                    ForEach(availableReasoning, id: \.self) {
                         Text($0.rawValue).tag(Message.CodexReasoning?.some($0))
                     }
                 }
@@ -109,10 +147,39 @@ struct CodexConfigForm: View {
             SkillPickerRows(skill: $skill, availableSkills: availableSkills, strings: strings)
             GridRow {
                 ConfigRowLabel("")
-                WorkingDirectoryPicker(workingDir: $workingDir, strings: strings)
+                WorkingDirectoryPicker(
+                    workingDir: $workingDir,
+                    trustWorkingDirectory: nil,
+                    strings: strings
+                )
+            }
+            GridRow {
+                ConfigRowLabel(strings.codexAccess)
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("", selection: $accessMode) {
+                        ForEach(CodexAccessMode.allCases, id: \.self) {
+                            Text(strings.codexAccessMode($0)).tag($0)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel(strings.codexAccess)
+
+                    Text(strings.codexAccessModeHelp(accessMode))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .font(.caption)
+        .onChange(of: model) { newModel in
+            reasoning = CodexModelCatalog.normalizedReasoning(
+                reasoning,
+                for: newModel,
+                in: availableModels
+            )
+        }
     }
 }
 
@@ -168,6 +235,7 @@ struct TimeoutPicker: View {
 
 struct WorkingDirectoryPicker: View {
     @Binding var workingDir: String
+    let trustWorkingDirectory: Binding<Bool>?
     let strings: L10n
 
     private var isEmpty: Bool {
@@ -180,26 +248,46 @@ struct WorkingDirectoryPicker: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Button(action: chooseDirectory) {
-                HStack(spacing: 6) {
-                    Image(systemName: "folder")
-                    Text(displayText)
-                        .foregroundStyle(isEmpty ? .secondary : .primary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Button(action: chooseDirectory) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder")
+                        Text(displayText)
+                            .foregroundStyle(
+                                isEmpty ? .secondary : .primary
+                            )
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-            .help(strings.workingDirectoryDefault)
+                .buttonStyle(.bordered)
+                .help(strings.workingDirectoryDefault)
 
-            if !isEmpty {
-                Button { workingDir = "" } label: { Image(systemName: "xmark.circle.fill") }
+                if !isEmpty {
+                    Button { workingDir = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
                     .buttonStyle(.plain)
                     .help(strings.clearWorkingDirectory)
                     .accessibilityLabel(strings.clearWorkingDirectory)
+                }
+            }
+
+            if !isEmpty, let trustWorkingDirectory {
+                Toggle(
+                    strings.trustWorkingDirectory,
+                    isOn: trustWorkingDirectory
+                )
+                .toggleStyle(.checkbox)
+                .help(strings.trustWorkingDirectoryHelp)
+
+                Text(strings.trustWorkingDirectoryHelp)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -210,6 +298,7 @@ struct WorkingDirectoryPicker: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.showsHiddenFiles = true
+        panel.message = strings.workingDirectoryTrustNotice
         panel.prompt = strings.chooseDirectory
         panel.directoryURL = initialDirectoryURL()
         guard panel.runModal() == .OK, let url = panel.url else { return }

@@ -98,6 +98,228 @@ final class AgendamentoEditorTests: XCTestCase {
         XCTAssertNil(draft.skill)
     }
 
+    func testTrustDaPastaEhPersistidoApenasQuandoRevogado() {
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "revisar"
+        draft.workingDir = "/tmp/projeto"
+
+        XCTAssertNil(
+            draft.normalizedTask().resolvedCommand.trustWorkingDirectory
+        )
+
+        draft.trustWorkingDirectory = false
+        let normalized = draft.normalizedTask()
+        let restored = AgendamentoDraft(editing: normalized)
+
+        XCTAssertEqual(
+            normalized.resolvedCommand.trustWorkingDirectory,
+            false
+        )
+        XCTAssertFalse(restored.trustWorkingDirectory)
+    }
+
+    func testSalvarComTrustSolicitaAcessoAntesDePersistir() {
+        let state = makeState()
+        var authorizedURLs: [URL] = []
+        let editor = AgendamentoEditor(
+            state: state,
+            isDirectory: { _ in true },
+            authorizeDirectory: {
+                authorizedURLs.append($0)
+                return true
+            }
+        )
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "revisar"
+        draft.workingDir = "/tmp/../tmp/projeto"
+
+        let result = editor.apply(.save(draft))
+
+        guard case .success = result else {
+            return XCTFail("save deveria ser autorizado")
+        }
+        XCTAssertEqual(
+            authorizedURLs,
+            [URL(fileURLWithPath: "/tmp/projeto")]
+        )
+        XCTAssertEqual(state.tasks.count, 1)
+    }
+
+    func testSalvarComAcessoNegadoNaoPersisteAgendamento() {
+        let state = makeState()
+        let editor = AgendamentoEditor(
+            state: state,
+            isDirectory: { _ in true },
+            authorizeDirectory: { _ in false }
+        )
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "revisar"
+        draft.workingDir = "/Volumes/protegido"
+
+        let result = editor.apply(.save(draft))
+
+        XCTAssertEqual(
+            result,
+            .failure(.invalid([
+                .workingDirectoryUnavailable(
+                    URL(fileURLWithPath: "/Volumes/protegido")
+                ),
+            ]))
+        )
+        XCTAssertTrue(state.tasks.isEmpty)
+    }
+
+    func testSalvarSemTrustNaoSolicitaAcessoAntecipado() {
+        let state = makeState()
+        var authorizationCalls = 0
+        let editor = AgendamentoEditor(
+            state: state,
+            isDirectory: { _ in true },
+            authorizeDirectory: { _ in
+                authorizationCalls += 1
+                return false
+            }
+        )
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "revisar"
+        draft.workingDir = "/Volumes/protegido"
+        draft.trustWorkingDirectory = false
+
+        guard case .success = editor.apply(.save(draft)) else {
+            return XCTFail("opt-out não deveria pedir acesso antecipado")
+        }
+        XCTAssertEqual(authorizationCalls, 0)
+        XCTAssertEqual(
+            state.tasks.first?.resolvedCommand.trustWorkingDirectory,
+            false
+        )
+    }
+
+    func testModosCodexControlamAutorizacaoAntecipadaDaPasta() {
+        let fixtures: [(mode: CodexAccessMode, expectedCalls: Int)] = [
+            (.fullAccess, 1),
+            (.workspaceWrite, 1),
+            (.readOnly, 0),
+        ]
+
+        for fixture in fixtures {
+            let state = makeState()
+            var authorizationCalls = 0
+            let editor = AgendamentoEditor(
+                state: state,
+                isDirectory: { _ in true },
+                authorizeDirectory: { _ in
+                    authorizationCalls += 1
+                    return true
+                }
+            )
+            var draft = AgendamentoDraft(editing: nil)
+            draft.text = "validar \(fixture.mode)"
+            draft.kind = .codex
+            draft.workingDir = "/tmp/projeto-codex"
+            draft.codexAccessMode = fixture.mode
+
+            guard case .success = editor.apply(.save(draft)) else {
+                return XCTFail("save de \(fixture.mode) deveria ter sucesso")
+            }
+            XCTAssertEqual(
+                authorizationCalls,
+                fixture.expectedCalls,
+                "autorização antecipada de \(fixture.mode)"
+            )
+        }
+    }
+
+    func testRespostaEmArquivoPadraoEhMarkdownECodexPermiteTudo() {
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "gere o relatório"
+        draft.kind = .codex
+        draft.outputMode = .response
+
+        let message = draft.normalizedTask().resolvedCommand
+
+        XCTAssertEqual(draft.responseFormat, .markdown)
+        XCTAssertFalse(draft.responseDirectory.isEmpty)
+        XCTAssertEqual(message.responseFileFormat, .markdown)
+        XCTAssertEqual(message.responseDirectory, draft.responseDirectory)
+        XCTAssertTrue(message.resolvedCodexAllowFullAccess)
+        XCTAssertEqual(message.resolvedCodexAccessMode, .fullAccess)
+    }
+
+    func testShellNaoPersisteConfiguracaoDeArquivoDeResposta() {
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "echo local"
+        draft.kind = .shell
+        draft.outputMode = .response
+        draft.responseFormat = .plainText
+        draft.responseDirectory = "/tmp/respostas"
+
+        let message = draft.normalizedTask().resolvedCommand
+
+        XCTAssertNil(message.responseFileFormat)
+        XCTAssertNil(message.responseDirectory)
+    }
+
+    func testModosRestritosDoCodexPersistemSemAmbiguidade() {
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "edite somente nesta pasta"
+        draft.kind = .codex
+        draft.codexAccessMode = .workspaceWrite
+
+        var message = draft.normalizedTask().resolvedCommand
+
+        XCTAssertEqual(message.codexAllowFullAccess, false)
+        XCTAssertEqual(message.trustWorkingDirectory, true)
+        XCTAssertEqual(message.resolvedCodexAccessMode, .workspaceWrite)
+
+        draft.text = "somente leia"
+        draft.codexAccessMode = .readOnly
+
+        message = draft.normalizedTask().resolvedCommand
+
+        XCTAssertEqual(message.codexAllowFullAccess, false)
+        XCTAssertEqual(message.trustWorkingDirectory, false)
+        XCTAssertFalse(message.resolvedCodexAllowFullAccess)
+        XCTAssertEqual(message.resolvedCodexAccessMode, .readOnly)
+    }
+
+    func testModosCodexFazemRoundTripComPersistenciaCanonica() {
+        let fixtures: [
+            (
+                mode: CodexAccessMode,
+                fullAccess: Bool?,
+                trust: Bool?
+            )
+        ] = [
+            (.fullAccess, nil, nil),
+            (.workspaceWrite, false, true),
+            (.readOnly, false, false),
+        ]
+
+        for fixture in fixtures {
+            var draft = AgendamentoDraft(editing: nil)
+            draft.text = "validar \(fixture.mode)"
+            draft.kind = .codex
+            draft.codexAccessMode = fixture.mode
+
+            let task = draft.normalizedTask()
+            let message = task.resolvedCommand
+            let restored = AgendamentoDraft(editing: task)
+
+            XCTAssertEqual(
+                message.codexAllowFullAccess,
+                fixture.fullAccess,
+                "full access de \(fixture.mode)"
+            )
+            XCTAssertEqual(
+                message.trustWorkingDirectory,
+                fixture.trust,
+                "trust de \(fixture.mode)"
+            )
+            XCTAssertEqual(restored.codexAccessMode, fixture.mode)
+        }
+    }
+
     func testContaExplicitaAusenteBloqueiaSaveSemVirarDefault() {
         let state = makeState()
         let editor = AgendamentoEditor(

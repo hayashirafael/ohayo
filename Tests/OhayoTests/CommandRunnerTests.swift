@@ -118,6 +118,33 @@ final class CommandRunnerTests: XCTestCase {
                        dir.standardizedFileURL)
     }
 
+    func testProviderSemWorkingDirUsaWorkspaceGerenciadoDoOhayo() async {
+        let runtime = CapturingCommandRuntime()
+        let workspace = URL(
+            fileURLWithPath: "/tmp/ohayo-managed-workspace",
+            isDirectory: true
+        )
+        var createdDirectories: [URL] = []
+        let runner = CommandRunner(
+            timeout: 5,
+            binaryOverride: URL(fileURLWithPath: "/tmp/fake-claude"),
+            defaultProviderWorkingDirectory: workspace,
+            directoryCreator: { createdDirectories.append($0) },
+            processRuntime: runtime
+        )
+
+        let result = await runner.run(
+            dispatch(Message(text: "1+1", kind: .claude))
+        )
+
+        XCTAssertEqual(result, .success(""))
+        XCTAssertEqual(
+            runtime.requests.last?.workingDirectory?.standardizedFileURL,
+            workspace.standardizedFileURL
+        )
+        XCTAssertEqual(createdDirectories, [workspace])
+    }
+
     func testShellUsaWorkingDirectoryDoDispatchPreparado() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("prepared-wd-\(UUID().uuidString)")
@@ -655,7 +682,11 @@ final class CommandRunnerTests: XCTestCase {
         let output = try result.get()
         XCTAssertTrue(output.contains("exec"))
         XCTAssertTrue(output.contains("--model gpt-5.5"))
-        XCTAssertTrue(output.contains("--sandbox read-only"))
+        XCTAssertTrue(
+            output.contains(
+                "--dangerously-bypass-approvals-and-sandbox"
+            )
+        )
         XCTAssertTrue(output.contains("--skip-git-repo-check"))
         XCTAssertTrue(output.contains("--color never"))
         XCTAssertTrue(output.contains(#"model_reasoning_effort="low""#))
@@ -684,9 +715,90 @@ final class CommandRunnerTests: XCTestCase {
         let args = try String(contentsOf: argsFile, encoding: .utf8)
             .split(separator: "\n")
             .map(String.init)
-        XCTAssertEqual(args, ["exec", "--sandbox", "read-only",
+        XCTAssertEqual(args, ["exec",
+                              "--dangerously-bypass-approvals-and-sandbox",
                               "--skip-git-repo-check", "--color", "never"])
         XCTAssertEqual(try String(contentsOf: stdinFile, encoding: .utf8), "segredo codex")
+    }
+
+    func testCodexConfiadoUsaSandboxComEscritaNoWorkspace() async throws {
+        let argsFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-args-\(UUID().uuidString).txt")
+        let workingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("projeto-confiado-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: workingDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: workingDirectory) }
+        let runner = CommandRunner(
+            timeout: 5,
+            binaryOverride: makeScript(
+                "printf '%s\n' \"$@\" > '\(argsFile.path)'; exit 0"
+            )
+        )
+        let message = Message(
+            text: "crie um arquivo",
+            kind: .codex,
+            workingDir: workingDirectory.path,
+            trustWorkingDirectory: true,
+            codexAllowFullAccess: false
+        )
+
+        let result = await runner.run(dispatch(message))
+
+        XCTAssertEqual(result, .success(""))
+        let args = try String(contentsOf: argsFile, encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        XCTAssertEqual(
+            args,
+            [
+                "exec", "--sandbox", "workspace-write",
+                "--skip-git-repo-check", "--color", "never",
+            ]
+        )
+    }
+
+    func testCodexComOptOutMantemSandboxSomenteLeitura() async throws {
+        let argsFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-args-\(UUID().uuidString).txt")
+        let workingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "projeto-nao-confiado-\(UUID().uuidString)"
+            )
+        try FileManager.default.createDirectory(
+            at: workingDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: workingDirectory) }
+        let runner = CommandRunner(
+            timeout: 5,
+            binaryOverride: makeScript(
+                "printf '%s\n' \"$@\" > '\(argsFile.path)'; exit 0"
+            )
+        )
+        let message = Message(
+            text: "revise sem alterar",
+            kind: .codex,
+            workingDir: workingDirectory.path,
+            trustWorkingDirectory: false,
+            codexAllowFullAccess: false
+        )
+
+        let result = await runner.run(dispatch(message))
+
+        XCTAssertEqual(result, .success(""))
+        let args = try String(contentsOf: argsFile, encoding: .utf8)
+            .split(separator: "\n")
+            .map(String.init)
+        XCTAssertEqual(
+            args,
+            [
+                "exec", "--sandbox", "read-only",
+                "--skip-git-repo-check", "--color", "never",
+            ]
+        )
     }
 
     /// Sem modelo/reasoning explícitos, o Codex omite `--model` e o `-c
@@ -707,7 +819,8 @@ final class CommandRunnerTests: XCTestCase {
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.isEmpty }
             .map(String.init)
-        XCTAssertEqual(args, ["exec", "--sandbox", "read-only",
+        XCTAssertEqual(args, ["exec",
+                              "--dangerously-bypass-approvals-and-sandbox",
                               "--skip-git-repo-check", "--color", "never"])
     }
 
@@ -726,7 +839,8 @@ final class CommandRunnerTests: XCTestCase {
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.isEmpty }
             .map(String.init)
-        XCTAssertEqual(args, ["exec", "--model", "gpt-5.5", "--sandbox", "read-only",
+        XCTAssertEqual(args, ["exec", "--model", "gpt-5.5",
+                              "--dangerously-bypass-approvals-and-sandbox",
                               "--skip-git-repo-check", "--color", "never",
                               "-c", "model_reasoning_effort=\"high\""])
     }
@@ -793,9 +907,24 @@ final class CommandRunnerTests: XCTestCase {
             .filter { !$0.isEmpty }
             .map(String.init)
         XCTAssertEqual(captured,
-                       ["exec", "--sandbox", "read-only", "--skip-git-repo-check",
+                       ["exec", "--dangerously-bypass-approvals-and-sandbox",
+                        "--skip-git-repo-check",
                         "--color", "never"])
         XCTAssertEqual(try String(contentsOf: stdinFile, encoding: .utf8), "$gmud oi")
+    }
+}
+
+private final class CapturingCommandRuntime: CLIProcessRunning {
+    private(set) var requests: [CLIProcessRequest] = []
+
+    func run(_ request: CLIProcessRequest) async -> CLIProcessResult {
+        requests.append(request)
+        return CLIProcessResult(
+            termination: .exited(0),
+            stdout: .empty,
+            stderr: .empty,
+            duration: 0
+        )
     }
 }
 

@@ -847,6 +847,143 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertEqual(state.history.first?.result, .launched)
     }
 
+    func testNovoContinuoCriadoComDefaultsDoFormularioDisparaClaudeECodexSemJanela()
+        async {
+        let providers: [(Message.Kind, Provider)] = [
+            (.claude, .claude),
+            (.codex, .codex),
+        ]
+
+        for (kind, provider) in providers {
+            let detector = MockDetector()
+            detector.end = nil
+            let state = AppState(defaults: freshDefaults())
+            let scheduler = TaskScheduler()
+            activeScheduler = scheduler
+            let launcher = CountingTerminalLauncher()
+            let env = AppEnvironment(
+                state: state,
+                taskScheduler: scheduler,
+                detector: detector,
+                terminalLauncher: launcher,
+                authenticationChecker: AllowAllAuthenticationChecker(),
+                probeCLIs: false
+            )
+            await drain(env)
+
+            let editor = AgendamentoEditor(
+                state: state,
+                isDirectory: { _ in true }
+            )
+            var draft = AgendamentoDraft(editing: nil)
+            draft.text = "iniciar janela \(provider.rawValue)"
+            draft.changeKind(to: kind)
+            draft.repetition = .continuous
+
+            guard case .success(.saved(let task)) =
+                    editor.apply(.save(draft)) else {
+                XCTFail("esperava salvar o contínuo \(provider.rawValue)")
+                continue
+            }
+            await drain(env)
+
+            XCTAssertEqual(
+                launcher.calls,
+                1,
+                "\(provider.rawValue) deveria iniciar sem execução manual"
+            )
+            XCTAssertEqual(
+                state.history.first?.result,
+                .launched,
+                "\(provider.rawValue) não deveria aguardar uma janela manual"
+            )
+            XCTAssertNotEqual(
+                state.renewalSnapshot[task.uid]?.phase,
+                .waitingForWindow,
+                "\(provider.rawValue) permaneceu aguardando janela"
+            )
+        }
+    }
+
+    func testContinuosLegadosSemCampoBootstrapDisparamClaudeECodexUmaVezAoAbrir()
+        async throws {
+        let defaults = freshDefaults()
+        let tasks = [
+            ScheduledTask(
+                uid: UUID(),
+                command: AppState.defaultMessage,
+                repetition: .continuous
+            ),
+            ScheduledTask(
+                uid: UUID(),
+                command: AppState.defaultCodexMessage,
+                repetition: .continuous
+            ),
+        ]
+        let encoded = try JSONEncoder().encode(tasks)
+        var legacyPayload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded)
+                as? [[String: Any]]
+        )
+        for index in legacyPayload.indices {
+            legacyPayload[index].removeValue(
+                forKey: "bootstrapWhenInactive"
+            )
+        }
+        defaults.set(
+            try JSONSerialization.data(withJSONObject: legacyPayload),
+            forKey: "tasks"
+        )
+
+        let state = AppState(defaults: defaults)
+        XCTAssertEqual(state.tasks.count, 2)
+        XCTAssertTrue(
+            state.tasks.allSatisfy { $0.bootstrapWhenInactive == nil }
+        )
+        let detector = MockDetector()
+        detector.end = nil
+        let scheduler = TaskScheduler()
+        activeScheduler = scheduler
+        let launcher = CountingTerminalLauncher()
+        let env = AppEnvironment(
+            state: state,
+            taskScheduler: scheduler,
+            detector: detector,
+            terminalLauncher: launcher,
+            authenticationChecker: AllowAllAuthenticationChecker(),
+            probeCLIs: false
+        )
+
+        await drain(env)
+
+        XCTAssertEqual(
+            launcher.calls,
+            2,
+            "cada contínuo legado deveria iniciar uma única vez ao abrir"
+        )
+        XCTAssertEqual(
+            state.history.compactMap(\.provider)
+                .map(\.rawValue)
+                .sorted(),
+            [Provider.claude.rawValue, Provider.codex.rawValue].sorted()
+        )
+        for task in state.tasks {
+            XCTAssertNotEqual(
+                state.renewalSnapshot[task.uid]?.phase,
+                .waitingForWindow,
+                "\(task.resolvedCommand.kind.rawValue) permaneceu aguardando"
+            )
+        }
+
+        await env.statusTick()
+
+        XCTAssertEqual(
+            launcher.calls,
+            2,
+            "o tick seguinte não deveria duplicar o bootstrap do launch"
+        )
+    }
+
     func testContaPausadaNaoConsomeBootstrapERetomaAoDespausar() async {
         let detector = MockDetector()
         let state = AppState(defaults: freshDefaults())

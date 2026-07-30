@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Formulário único de agendamento: tipo (Claude/Codex/Comando), prompt com
@@ -16,6 +17,7 @@ struct AgendamentoFormSheet: View {
     @State private var skillRefreshTask: Task<Void, Never>? = nil
     @State private var codexPluginInventories =
         CodexPluginInventoryCache()
+    @State private var codexModels: [CodexModelOption]
     @State private var commitErrorMessage: String?
     @State private var showingAdvancedOptions: Bool
 
@@ -23,8 +25,32 @@ struct AgendamentoFormSheet: View {
         self._state = ObservedObject(wrappedValue: state)
         self.editing = editing
         self.onDone = onDone
-        let restored = AgendamentoDraft(editing: editing)
+        var restored = AgendamentoDraft(
+            editing: editing,
+            defaultResponseDirectory: AppPaths.responsesDirectory(
+                home: state.dispatchHomeDirectory
+            )
+        )
+        restored.favoriteResponseDirectory =
+            state.isResponseDirectoryFavorite(
+                URL(
+                    fileURLWithPath: restored.responseDirectory,
+                    isDirectory: true
+                )
+            )
         _draft = State(initialValue: restored)
+        let codexDirectory = restored.account.map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+        } ?? ProviderAccountContext.defaultConfigDirectory(
+            for: .codex,
+            homeDirectory: state.dispatchHomeDirectory
+        )
+        _codexModels = State(
+            initialValue: CodexModelCatalog.load(
+                from: codexDirectory,
+                strings: state.strings
+            )
+        )
         _showingAdvancedOptions = State(
             initialValue: Self.hasAdvancedConfiguration(restored)
         )
@@ -74,8 +100,12 @@ struct AgendamentoFormSheet: View {
             // O estado (kind/account/skill/…) já nasceu correto no `init`;
             // aqui só o efeito colateral de revarrer o disco é necessário.
             refreshSkills()
+            refreshCodexModels(preservesUnknownModel: true)
         }
-        .onChange(of: draft.account) { _ in refreshSkills() }
+        .onChange(of: draft.account) { _ in
+            refreshSkills()
+            refreshCodexModels()
+        }
         .onChange(of: draft.workingDir) { _ in
             // Plugins pertencem à conta, não ao cwd. Recalcula apenas os
             // scopes do projeto e reaproveita o inventário já carregado,
@@ -193,6 +223,8 @@ struct AgendamentoFormSheet: View {
                              skill: skillBinding,
                              availableSkills: availableSkills,
                              workingDir: $draft.workingDir,
+                             trustWorkingDirectory:
+                                $draft.trustWorkingDirectory,
                              accounts: state.accounts(for: .claude),
                              accountLabel: { state.label(for: $0) },
                              strings: strings,
@@ -200,6 +232,8 @@ struct AgendamentoFormSheet: View {
         } else if draft.kind == .codex {
             CodexConfigForm(model: $draft.codexModel,
                             reasoning: $draft.codexReasoning,
+                            accessMode: $draft.codexAccessMode,
+                            availableModels: codexModels,
                             configDir: $draft.account,
                             skill: skillBinding,
                             availableSkills: availableSkills,
@@ -249,6 +283,13 @@ struct AgendamentoFormSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            if AgendamentoDraft.supportsResponseFile(
+                kind: draft.kind,
+                outputMode: draft.outputMode
+            ) {
+                responseFileConfiguration
+            }
+
             // Independente do modo de execução acima: notifica só em sucesso;
             // ao salvar a resposta, a notificação de resposta vence.
             Toggle(strings.notifyOnSuccess, isOn: $draft.notifyOnSuccess)
@@ -268,11 +309,117 @@ struct AgendamentoFormSheet: View {
         .font(.callout)
     }
 
+    private var responseFileConfiguration: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text(strings.responseFileFormat)
+                    .foregroundStyle(.secondary)
+                Picker("", selection: $draft.responseFormat) {
+                    Text(strings.markdownFile)
+                        .tag(ResponseFileFormat.markdown)
+                    Text(strings.plainTextFile)
+                        .tag(ResponseFileFormat.plainText)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityLabel(strings.responseFileFormat)
+            }
+
+            HStack(spacing: 6) {
+                Button(action: chooseResponseDirectory) {
+                    Label(
+                        responseDirectoryDisplayName,
+                        systemImage: "folder"
+                    )
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                .help(strings.chooseResponseDirectory)
+
+                if !state.favoriteResponseDirectories.isEmpty {
+                    Menu {
+                        ForEach(
+                            state.favoriteResponseDirectories,
+                            id: \.self
+                        ) { path in
+                            Button(
+                                (path as NSString)
+                                    .abbreviatingWithTildeInPath
+                            ) {
+                                selectResponseDirectory(path)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "star")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .help(strings.favoriteResponseDirectories)
+                    .accessibilityLabel(
+                        strings.favoriteResponseDirectories
+                    )
+                }
+            }
+
+            Toggle(
+                strings.favoriteResponseDirectory,
+                isOn: $draft.favoriteResponseDirectory
+            )
+            .toggleStyle(.checkbox)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var responseDirectoryDisplayName: String {
+        let trimmed = draft.responseDirectory.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        return trimmed.isEmpty
+            ? strings.chooseResponseDirectory
+            : (trimmed as NSString).abbreviatingWithTildeInPath
+    }
+
+    private func chooseResponseDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.showsHiddenFiles = true
+        panel.prompt = strings.chooseDirectory
+        let current = NSString(
+            string: draft.responseDirectory
+        ).expandingTildeInPath
+        panel.directoryURL = URL(
+            fileURLWithPath: current,
+            isDirectory: true
+        )
+        guard panel.runModal() == .OK, let directory = panel.url else {
+            return
+        }
+        selectResponseDirectory(directory.standardizedFileURL.path)
+    }
+
+    private func selectResponseDirectory(_ path: String) {
+        let directory = URL(
+            fileURLWithPath:
+                NSString(string: path).expandingTildeInPath,
+            isDirectory: true
+        ).standardizedFileURL
+        draft.responseDirectory = directory.path
+        draft.favoriteResponseDirectory =
+            state.isResponseDirectoryFavorite(directory)
+    }
+
     private var outputModeDescription: String {
         switch draft.outputMode {
         case .none: return strings.runInBackgroundDescription
         case .terminal: return strings.runInTerminalDescription
-        case .response: return strings.showResponseDescription
+        case .response:
+            return draft.kind == .shell
+                ? strings.showShellResponseDescription
+                : strings.showResponseDescription
         }
     }
 
@@ -354,6 +501,7 @@ struct AgendamentoFormSheet: View {
             set: { newKind in
                 draft.changeKind(to: newKind)
                 refreshSkills()
+                refreshCodexModels()
             }
         )
     }
@@ -474,6 +622,10 @@ struct AgendamentoFormSheet: View {
             return strings.continuousConflict
         case .accountUnavailable:
             return strings.accountFolderMissing
+        case .workingDirectoryUnavailable:
+            return strings.workingDirectoryAuthorizationDenied(
+                for: draft.kind
+            )
         }
     }
 
@@ -552,6 +704,31 @@ struct AgendamentoFormSheet: View {
         }
     }
 
+    private func refreshCodexModels(
+        preservesUnknownModel: Bool = false
+    ) {
+        guard draft.kind == .codex else { return }
+        let directory = draft.account.map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+        } ?? ProviderAccountContext.defaultConfigDirectory(
+            for: .codex,
+            homeDirectory: state.dispatchHomeDirectory
+        )
+        let models = CodexModelCatalog.load(
+            from: directory,
+            strings: state.strings
+        )
+        codexModels = models
+        let selection = CodexModelCatalog.normalizedSelection(
+            modelSlug: draft.codexModel,
+            reasoning: draft.codexReasoning,
+            in: models,
+            preservesUnknownModel: preservesUnknownModel
+        )
+        draft.codexModel = selection.modelSlug
+        draft.codexReasoning = selection.reasoning
+    }
+
     private var selectedWorkingDirectoryURL: URL? {
         let trimmed = draft.workingDir.trimmingCharacters(
             in: .whitespacesAndNewlines
@@ -569,6 +746,7 @@ struct AgendamentoFormSheet: View {
             || draft.safeMode != Message.defaultSafeMode
             || !draft.codexModel.isEmpty
             || draft.codexReasoning != nil
+            || draft.codexAccessMode != .fullAccess
             || draft.timeoutSeconds != nil
             || draft.skill?.isEmpty == false
             || !draft.workingDir.isEmpty
@@ -577,6 +755,18 @@ struct AgendamentoFormSheet: View {
     private func commit() {
         switch editor.apply(.save(draft)) {
         case .success:
+            if AgendamentoDraft.supportsResponseFile(
+                kind: draft.kind,
+                outputMode: draft.outputMode
+            ) {
+                state.setResponseDirectoryFavorite(
+                    URL(
+                        fileURLWithPath: draft.responseDirectory,
+                        isDirectory: true
+                    ),
+                    draft.favoriteResponseDirectory
+                )
+            }
             onDone()
         case .failure(let error):
             switch error {

@@ -75,6 +75,41 @@ final class MockNotifier: Notifying {
     }
 }
 
+final class MockResponseFileWriter: ResponseFileWriting {
+    struct Call: Equatable {
+        let response: String
+        let format: ResponseFileFormat
+        let directory: URL
+        let taskName: String?
+        let fallbackName: String
+        let date: Date
+    }
+
+    var result: Result<URL, ResponseFileWriteError> = .success(
+        URL(fileURLWithPath: "/tmp/resposta.md")
+    )
+    var calls: [Call] = []
+
+    func write(
+        response: String,
+        format: ResponseFileFormat,
+        directory: URL,
+        taskName: String?,
+        fallbackName: String,
+        date: Date
+    ) async -> Result<URL, ResponseFileWriteError> {
+        calls.append(Call(
+            response: response,
+            format: format,
+            directory: directory,
+            taskName: taskName,
+            fallbackName: fallbackName,
+            date: date
+        ))
+        return result
+    }
+}
+
 final class MockTerminalLauncher: TerminalLaunching {
     var result: Result<Void, RunnerError> = .success(())
     var calls = 0
@@ -172,6 +207,7 @@ final class FireControllerTests: XCTestCase {
     var detector: MockDetector!
     var runner: MockRunner!
     var notifier: MockNotifier!
+    var responseFileWriter: MockResponseFileWriter!
     var authentication: MockAuthenticationChecker!
     var controller: FireController!
     let now = Date(timeIntervalSince1970: 1_783_000_000)
@@ -184,10 +220,12 @@ final class FireControllerTests: XCTestCase {
         detector = MockDetector()
         runner = MockRunner()
         notifier = MockNotifier()
+        responseFileWriter = MockResponseFileWriter()
         authentication = MockAuthenticationChecker()
         controller = FireController(state: state, detector: detector, runner: runner,
                                     notifier: notifier, clock: FakeClock(now: now),
-                                    authenticationChecker: authentication)
+                                    authenticationChecker: authentication,
+                                    responseFileWriter: responseFileWriter)
     }
 
     func testRenovacaoComQuotaIndisponivelFalhaFechadoSemDisparar() async {
@@ -840,6 +878,25 @@ final class FireControllerTests: XCTestCase {
             date: now, result: .success, message: msg, origin: .scheduled))
     }
 
+    func testRespostaShellPermaneceNoHistoricoSemExportarArquivo() async {
+        runner.result = .success("saída local")
+        let message = Message(
+            text: "echo local",
+            kind: .shell,
+            showResponse: true,
+            responseFileFormat: .plainText,
+            responseDirectory: "/tmp"
+        )
+
+        await controller.fire(message: message, origin: .scheduled)
+
+        XCTAssertEqual(state.lastEvent?.response, "saída local")
+        XCTAssertNil(state.lastEvent?.responseFileFormat)
+        XCTAssertNil(state.lastEvent?.responseFilePath)
+        XCTAssertNil(state.lastEvent?.responseFileError)
+        XCTAssertTrue(responseFileWriter.calls.isEmpty)
+    }
+
     func testRespostaSalvaENotificadaQuandoLigado() async {
         runner.result = .success("resposta do claude")
         let msg = Message(text: "resumo", kind: .claude, showResponse: true)
@@ -849,11 +906,90 @@ final class FireControllerTests: XCTestCase {
         XCTAssertEqual(notifier.responses.first?.messageText, "Ohayo: resumo")
     }
 
+    func testRespostaClaudeMarkdownEhExportadaERegistradaNoHistorico() async {
+        runner.result = .success("# Resultado\n\nTudo certo.")
+        let directory = "/tmp/relatorios"
+        let msg = Message(
+            text: "resumo",
+            kind: .claude,
+            showResponse: true,
+            runInTerminal: false,
+            responseFileFormat: .markdown,
+            responseDirectory: directory
+        )
+
+        let outcome = await controller.fire(
+            message: msg,
+            origin: .agenda,
+            taskName: "Relatório diário"
+        )
+
+        XCTAssertEqual(outcome, .completed)
+        XCTAssertEqual(responseFileWriter.calls, [
+            .init(
+                response: "# Resultado\n\nTudo certo.",
+                format: .markdown,
+                directory: URL(
+                    fileURLWithPath: directory,
+                    isDirectory: true
+                ).standardizedFileURL,
+                taskName: "Relatório diário",
+                fallbackName: "response",
+                date: now
+            ),
+        ])
+        XCTAssertEqual(state.lastEvent?.responseFileFormat, .markdown)
+        XCTAssertEqual(state.lastEvent?.responseFilePath, "/tmp/resposta.md")
+        XCTAssertNil(state.lastEvent?.responseFileError)
+    }
+
+    func testRespostaCodexTxtUsaMesmoFluxoDeExportacao() async {
+        runner.result = .success("resultado")
+        responseFileWriter.result = .success(
+            URL(fileURLWithPath: "/tmp/resultado.txt")
+        )
+        let msg = Message(
+            text: "resumo",
+            kind: .codex,
+            showResponse: true,
+            runInTerminal: false,
+            responseFileFormat: .plainText,
+            responseDirectory: "/tmp"
+        )
+
+        await controller.fire(message: msg, origin: .agenda)
+
+        XCTAssertEqual(responseFileWriter.calls.first?.format, .plainText)
+        XCTAssertEqual(state.lastEvent?.responseFileFormat, .plainText)
+        XCTAssertEqual(state.lastEvent?.responseFilePath, "/tmp/resultado.txt")
+    }
+
+    func testFalhaAoExportarNaoReexecutaComandoEPermaneceVisivel() async {
+        runner.result = .success("resposta útil")
+        responseFileWriter.result = .failure(.failed("sem permissão"))
+        let msg = Message(
+            text: "resumo",
+            kind: .claude,
+            showResponse: true,
+            runInTerminal: false
+        )
+
+        let outcome = await controller.fire(message: msg, origin: .agenda)
+
+        XCTAssertEqual(outcome, .completed)
+        XCTAssertEqual(runner.calls, 1)
+        XCTAssertEqual(state.lastEvent?.result, .success)
+        XCTAssertEqual(state.lastEvent?.response, "resposta útil")
+        XCTAssertEqual(state.lastEvent?.responseFileError, "sem permissão")
+        XCTAssertNil(state.lastEvent?.responseFilePath)
+    }
+
     func testRespostaIgnoradaQuandoDesligado() async {
         runner.result = .success("resposta do claude")
         await controller.fire(message: Message(text: "1+1", kind: .claude), origin: .scheduled)
         XCTAssertNil(state.lastEvent?.response)
         XCTAssertTrue(notifier.responses.isEmpty)
+        XCTAssertTrue(responseFileWriter.calls.isEmpty)
     }
 
     func testRespostaTruncadaEm4000() async {
@@ -966,7 +1102,8 @@ final class FireControllerTests: XCTestCase {
         let terminal = MockTerminalLauncher()
         controller = FireController(state: state, detector: detector, runner: runner,
                                     terminalLauncher: terminal,
-                                    notifier: notifier, clock: FakeClock(now: now))
+                                    notifier: notifier, clock: FakeClock(now: now),
+                                    responseFileWriter: responseFileWriter)
 
         let message = Message(text: "bom dia", kind: .claude)
         await controller.fire(message: message, origin: .scheduled)
@@ -999,7 +1136,8 @@ final class FireControllerTests: XCTestCase {
         let terminal = MockTerminalLauncher()
         controller = FireController(state: state, detector: detector, runner: runner,
                                     terminalLauncher: terminal,
-                                    notifier: notifier, clock: FakeClock(now: now))
+                                    notifier: notifier, clock: FakeClock(now: now),
+                                    responseFileWriter: responseFileWriter)
         detector.end = now.addingTimeInterval(3600)
         runner.result = .success("Porto Alegre")
 
@@ -1011,7 +1149,9 @@ final class FireControllerTests: XCTestCase {
         XCTAssertEqual(runner.calls, 1)
         XCTAssertEqual(state.lastEvent, state.makeEvent(
             date: now, result: .success, message: message,
-            origin: .agenda, response: "Porto Alegre"))
+            origin: .agenda, response: "Porto Alegre",
+            responseFileFormat: .markdown,
+            responseFilePath: "/tmp/resposta.md"))
         XCTAssertEqual(notifier.responses.count, 1)
         XCTAssertEqual(notifier.responses.first?.response, "Porto Alegre")
     }

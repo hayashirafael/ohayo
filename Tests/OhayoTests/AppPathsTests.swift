@@ -18,6 +18,10 @@ final class AppPathsTests: XCTestCase {
             AppPaths.instanceLockPath(profile: .production, home: home),
             support.appendingPathComponent("instance.lock").path
         )
+        XCTAssertEqual(
+            AppPaths.responsesDirectory(profile: .production, home: home),
+            support.appendingPathComponent("Responses")
+        )
     }
 
     func testDevelopmentSupportWorkspaceAndLockUseOhayoDevDirectory() {
@@ -37,6 +41,10 @@ final class AppPathsTests: XCTestCase {
         XCTAssertEqual(
             AppPaths.instanceLockPath(profile: .development, home: home),
             support.appendingPathComponent("instance.lock").path
+        )
+        XCTAssertEqual(
+            AppPaths.responsesDirectory(profile: .development, home: home),
+            support.appendingPathComponent("Responses")
         )
     }
 }
