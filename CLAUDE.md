@@ -16,7 +16,8 @@ account.
 
 ### Issue tracker
 
-Issues and PRDs are tracked in GitHub Issues for `hayashirafael/ohayo`. See `docs/agents/issue-tracker.md`.
+Issues and PRDs are tracked in the private GitHub repository
+`hayashirafael/ohayo-private-tracker`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
