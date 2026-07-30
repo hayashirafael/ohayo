@@ -25,20 +25,23 @@ consulta separadamente o GitHub para buscar atualizações assinadas do app.
   de janela ativa) ou **Horários fixos** (horários × dias da semana). Tudo na
   seção **Agendamentos**
 - **Comandos configuráveis** — um prompt do Claude (modelo, esforço,
-  safe-mode, pasta de trabalho), um prompt do Codex (modelo, esforço de
-  raciocínio, pasta de trabalho), ou qualquer comando shell — embutido direto
-  no agendamento. Prompts Claude/Codex abrem no Terminal.app por padrão, para
-  você continuar interagindo na mesma sessão; se desligar essa opção, rodam em
-  modo batch
+  safe-mode, pasta de trabalho), um prompt do Codex (modelos e esforços de
+  raciocínio descobertos na conta selecionada, acesso total ao filesystem
+  ligado por padrão, pasta de trabalho), ou qualquer comando shell — embutido
+  direto no agendamento. Prompts Claude/Codex abrem no Terminal.app por padrão,
+  para você continuar interagindo na mesma sessão; se desligar essa opção,
+  rodam em modo batch
 - **Multi-conta, Claude e Codex** — as pastas padrão (`~/.claude`, `~/.codex`)
   são detectadas automaticamente quando existem; outras pastas `~/.claude*`
   entram uma única vez, na primeira abertura, e daí em diante novas contas são
   adicionadas a qualquer momento via "Adicionar conta…" — mostra o e-mail
   logado, aceita apelidos
-- **Histórico** — disparos recentes com status e resposta expansível (log
-  capturado de stdout/stderr nas falhas), incluindo o estado separado
-  **Iniciado** para sessões interativas no Terminal; pode ser limpo a qualquer
-  momento
+- **Histórico e arquivos de resposta** — disparos recentes com status e
+  resposta expansível (Markdown é formatado quando selecionado, e o
+  stdout/stderr das falhas continua disponível), incluindo o estado separado
+  **Iniciado** para sessões interativas no Terminal. Respostas batch do
+  Claude/Codex podem ser salvas em `.md` (padrão) ou `.txt` numa pasta
+  escolhida, com pastas favoritas para reutilização
 - **Notificações privadas por padrão** — notificações do macOS escondem
   prompt, resposta, erro e conta até você habilitar explicitamente os detalhes
   em **Geral**
@@ -197,8 +200,9 @@ quatro seções:
     customizações do Claude; a UI deixa claro que isso amplia o contexto e não
     é sandbox de filesystem
 - **Histórico** — disparos recentes em cards com status, ícone do provedor,
-  modelo, apelido/e-mail da conta, comando, resposta e detalhes de erro;
-  filtrável por conta do mesmo jeito que Agendamentos
+  modelo, apelido/e-mail da conta, comando, resposta Markdown formatada, link
+  para o arquivo salvo e detalhes de erro; filtrável por conta do mesmo jeito
+  que Agendamentos
 - **Geral** — Iniciar com o Mac, tempo restante na barra de menus, detalhes
   sensíveis nas notificações (desligados por padrão), quantos próximos Disparos
   o painel mostra (1–5), Idioma, acesso ao sistema, a versão do app e **Buscar
@@ -265,14 +269,28 @@ trust no Terminal quando necessário. Imports externos do `CLAUDE.md` também
 nunca são pré-aprovados; esse consentimento continua visível.
 
 Os padrões Claude — Haiku, esforço baixo, customizações ignoradas e `1+1` —
-formam um Comando mínimo para a Repetição Contínua. Um Disparo Codex batch
-executa `codex exec [--model <modelo>] --sandbox read-only [-c
-model_reasoning_effort=<esforço>]`; o prompt também chega por stdin. Em
-**Padrão da conta**, modelo e raciocínio são omitidos para o `config.toml`
-valer. O timeout batch é configurável por agendamento: o padrão é 15 minutos
-para Claude/Codex e 5 minutos para shell; sessões interativas no Terminal não
-são supervisionadas por timeout. A captura é limitada preservando o início e a
-cauda, onde normalmente está o erro.
+formam um Comando mínimo para a Repetição Contínua. O Ohayo lê o
+`models_cache.json` da conta Codex selecionada para oferecer apenas os modelos
+listados e seus esforços de raciocínio compatíveis, com um fallback interno
+atual quando esse cache não estiver disponível. Por padrão, um Disparo Codex
+batch executa `codex exec [--model <modelo>]
+--dangerously-bypass-approvals-and-sandbox [-c
+model_reasoning_effort=<esforço>]`; ao desligar **Permitir acesso total**, usa
+`--sandbox read-only`. A mesma escolha vale para sessões interativas no
+Terminal, e o prompt sempre chega por stdin. Em **Padrão da conta**, modelo e
+raciocínio são omitidos para o `config.toml` valer.
+
+Quando **Mostrar resposta** está ligado num Agendamento Claude/Codex batch, a
+resposta capturada completa é salva atomicamente como Markdown (padrão) ou
+texto simples na pasta selecionada; o padrão é
+`~/Library/Application Support/Ohayo/Responses` (ou o equivalente isolado
+`Ohayo Dev/Responses`). Pastas favoritas ficam salvas localmente para
+reutilização. O Histórico mantém uma prévia limitada, renderiza Markdown e
+oferece um link para o arquivo. O timeout batch é configurável por agendamento:
+o padrão é 15 minutos para Claude/Codex e 5 minutos para shell; sessões
+interativas no Terminal não são supervisionadas por timeout. A captura do
+processo é limitada preservando o início e a cauda, onde normalmente está o
+erro.
 
 Só uma instância do Ohayo roda por vez. Dentro dela, disparos formam uma fila
 FIFO por provider/conta em vez de serem descartados por um lock global; contas

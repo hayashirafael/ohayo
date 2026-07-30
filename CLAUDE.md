@@ -44,11 +44,17 @@ account.
 - **hi** — the dispatch that opens/renews a window.
 - **Message** — the embedded content of an agendamento: a Claude prompt
   (configurable model, effort, safe-mode, working dir), a Codex prompt
-  (configurable model, reasoning effort, account), or a raw shell command.
+  (account-aware model catalog, supported reasoning effort, full-access
+  policy, working dir), or a raw shell command.
   Default message: `1+1` · Haiku · low effort · safe-mode (uid `…0001`,
   `AppState.defaultMessage`); Codex has its own minimal default
   (`AppState.defaultCodexMessage`, uid `…0002`). Codex with no explicit model
   omits `--model` (and reasoning) so the account's `config.toml` default wins.
+  Full access is on by default for new Codex schedules and can be explicitly
+  disabled to use a read-only sandbox. A provider Message that shows its
+  response also stores `.md` (default) or `.txt` output in the selected folder
+  (default `~/Library/Application Support/Ohayo/Responses`, isolated as
+  `Ohayo Dev/Responses` in the development profile).
   Claude/Codex default to an interactive Terminal hand-off; `runInTerminal:
   false` is batch. Batch timeout is configurable (`timeoutSeconds`), defaulting
   to 900s for providers and 300s for shell; Terminal is unsupervised and has no
@@ -87,8 +93,10 @@ account.
   `accountFilter: URL?` is the deep-link the menu panel sets to scope the
   Schedules/History sections to one account
   (`taskMatchesFilter`/`matchesFilter`), with a clear-filter chip in both.
-  Account-provider registrations, notification privacy and the bounded history
-  are persisted; `clearHistory()` deletes the local history blob.
+  Account-provider registrations, favorite response folders, notification
+  privacy and the bounded history are persisted; `clearHistory()` deletes the
+  local history blob. History events retain the response format, saved-file
+  path and any file-write error.
 - `AppEnvironment.swift` — composition root; wires both engines ↔ controller,
   observes sleep/wake and `$tasks` (single `reconfigureSchedules`: continuous
   agendamentos feed `RenewalEngine`, fixed ones `TaskScheduler`).
@@ -116,20 +124,30 @@ account.
   `paused`, `retryableFailure`, `needsAttention`). Runs are FIFO per
   provider/account, while different accounts may advance concurrently; jobs
   are never discarded by a global busy flag. Terminal hand-off records
-  `.launched`, never `.success`. Notification details are private by default
-  and only include prompt/response/error/account after explicit opt-in.
+  `.launched`, never `.success`. Completed visible provider responses are
+  written through `ResponseFileWriting`; the full captured output goes to the
+  file while history keeps a bounded preview. A file-write failure is recorded
+  without reclassifying a successful provider run. Notification details are
+  private by default and only include prompt/response/error/account after
+  explicit opt-in.
 - `Provider.swift` — the claude/codex axis: folder-content detection,
   transcripts subpath, usage-window duration, environment key, CLI binary name,
   display name.
+- `CodexModelCatalog.swift` — decodes the selected account's
+  `models_cache.json`, exposes only `list` models and their supported reasoning
+  efforts, and fails closed to a current Sol/Terra/Luna fallback catalog.
 - `CommandRunner.swift` — subprocess: `claude -p --model … --effort …
-  [--safe-mode]`, `codex exec [--model …] --sandbox read-only …
-  [-c model_reasoning_effort=…]` (model/reasoning flags omitted when unset →
-  account default), or login-shell command. Claude/Codex prompts come from
-  stdin, not argv; shell remains `-l -c`. `ProviderAccountContext` applies the
-  correct native/custom environment. Timeouts come from the message, output is
-  capped as UTF-8-safe head + tail, and timeout termination targets only
-  positive PIDs observed in the process tree (SIGTERM then best-effort
-  SIGKILL).
+  [--safe-mode]`, or `codex exec [--model …]
+  --dangerously-bypass-approvals-and-sandbox … [-c
+  model_reasoning_effort=…]` by default; explicit full-access opt-out replaces
+  that flag with `--sandbox read-only` (model/reasoning flags omitted when
+  unset → account default). Claude/Codex prompts come from stdin, not argv;
+  shell remains `-l -c`. `ProviderAccountContext` applies the correct
+  native/custom environment. Timeouts come from the message, output is capped
+  as UTF-8-safe head + tail, and timeout termination targets only positive PIDs
+  observed in the process tree (SIGTERM then best-effort SIGKILL).
+- `ResponseFileWriter.swift` — creates the selected output folder and writes
+  complete provider responses atomically to unique `.md`/`.txt` files.
 - `TerminalLauncher.swift` — disparo interativo (`message.resolvedRunInTerminal`):
   abre uma sessão no Terminal.app via AppleScript rodando um `.sh` temporário
   privado (0600, traps de auto-`rm`, limpeza de resíduos antigos); aplica o
@@ -202,8 +220,9 @@ account.
   deep-link, with a clear-filter chip) + `AgendamentoFormSheet`
   (fixed times as chips via `TimeChipsEditor`, 5h chain generator, day
   presets, next-fire preview), `HistoryTab` (also filterable by
-  `accountFilter`, distinguishes Terminal `.launched`, and clears all local
-  history behind a destructive confirmation), `GeneralTab` (including the
+  `accountFilter`, renders Markdown responses, links to saved response files,
+  distinguishes Terminal `.launched`, and clears all local history behind a
+  destructive confirmation), `GeneralTab` (including the
   default-off sensitive-notification-details toggle). The first-run
   `PermissionSetupView` embeds the passive Provider Doctor before the macOS
   permission controls.

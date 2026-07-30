@@ -1,5 +1,14 @@
 import Foundation
 
+enum MarkdownResponseFormatter {
+    static func attributedString(_ source: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: source,
+            options: .init(interpretedSyntax: .full)
+        )) ?? AttributedString(source)
+    }
+}
+
 @MainActor
 enum Fmt {
     private enum Style: CaseIterable { case hhmm, dayTime, weekdayTime }
