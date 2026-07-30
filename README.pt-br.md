@@ -79,7 +79,7 @@ brew install --cask ohayo
 O Ohayo deve ser instalado de forma limpa. Remova completamente qualquer
 instalação anterior antes de instalar a primeira versão com Sparkle. Depois
 dessa instalação-bootstrap, as próximas releases podem ser instaladas em
-**Ajustes… → Sobre → Buscar atualizações…**.
+**Ohayo → Geral → Sobre → Buscar atualizações…**.
 
 ### DMG
 
@@ -111,8 +111,8 @@ open build/Ohayo.app
 A versão 1.2.0 é o bootstrap do atualizador. Instalações anteriores, ainda sem
 Sparkle, precisam desta última atualização manual via Homebrew/DMG. A partir da
 1.2.0, o Ohayo consulta diariamente o feed assinado e oferece **Instalar e
-reiniciar** dentro do app. Use **Ajustes… → Sobre → Buscar atualizações…** para
-verificar imediatamente.
+reiniciar** dentro do app. Use **Ohayo → Geral → Sobre → Buscar
+atualizações…** para verificar imediatamente.
 
 Mesmo no modo gratuito para testers, os arquivos de atualização e o feed são
 validados criptograficamente por uma chave EdDSA separada do Sparkle. Developer
@@ -122,10 +122,12 @@ juntos o DMG final e seu `appcast.xml` assinado.
 
 ## Uso
 
-O Ohayo vive na menu bar (sem ícone no Dock). O ícone fica preenchido
-enquanto alguma conta tem janela ativa, mostra `!` em erro e esmaece quando
-todas as contas agendadas estão pausadas; opcionalmente mostra também o tempo
-até a próxima janela vencer entre elas.
+O Ohayo vive na menu bar, sem ícone permanente no Dock. O macOS exibe um ícone
+no Dock apenas enquanto uma janela padrão do Ohayo está aberta, para que ela
+possa receber foco. O ícone da menu bar fica preenchido enquanto alguma conta
+tem janela ativa, mostra `!` em erro e esmaece quando todas as contas agendadas
+estão pausadas; opcionalmente mostra também o tempo até a próxima janela vencer
+entre elas.
 
 Clicar no ícone abre um painel com os próximos disparos agendados entre todas as
 contas — quantos, é configurável em **Geral** (1–5, padrão 1) — ordenados
@@ -140,8 +142,8 @@ ausente vira um aviso acionável de configuração; **Ajustes…**,
 **Permissões…** e **Sair do Ohayo** ficam agrupados no menu de ações
 secundárias.
 
-A janela operacional **Ohayo** abre em **Agendamentos** e tem uma sidebar com
-três seções:
+A janela central **Ohayo** abre em **Agendamentos** e tem uma sidebar com
+quatro seções:
 
 - **Contas** — por conta, a identidade logada / apelido, o provedor com seu
   ícone, a pasta local, quantos agendamentos ativos miram a conta, e
@@ -166,12 +168,10 @@ três seções:
 - **Histórico** — disparos recentes em cards com status, ícone do provedor,
   modelo, apelido/e-mail da conta, comando, resposta e detalhes de erro;
   filtrável por conta do mesmo jeito que Agendamentos
-
-As preferências gerais ficam na janela nativa **Ajustes…**, separadas da
-sidebar operacional: Iniciar com o Mac, tempo restante na barra de menus,
-detalhes sensíveis nas notificações (desligados por padrão), quantos próximos
-Disparos o painel mostra (1–5), Idioma, acesso ao sistema, a versão do app e
-**Buscar atualizações…**.
+- **Geral** — Iniciar com o Mac, tempo restante na barra de menus, detalhes
+  sensíveis nas notificações (desligados por padrão), quantos próximos Disparos
+  o painel mostra (1–5), Idioma, acesso ao sistema, a versão do app e **Buscar
+  atualizações…**
 
 ### Permissões na primeira abertura
 
@@ -182,7 +182,7 @@ leitura: nunca executam prompt, iniciam login ou consomem cota. Nele você tamb�
 pode permitir notificações, testar a automação do Terminal usada nas sessões
 interativas e, opcionalmente, ativar **Iniciar com o Mac**. Fechar o guia não
 desativa o app; reabra-o pelo menu de ações secundárias do painel ou em
-**Ajustes… → Acesso ao Sistema → Permissões…**.
+**Ohayo → Geral → Acesso ao Sistema → Permissões…**.
 
 Se notificações ou automação do Terminal forem negadas, altere-as em **Ajustes
 do Sistema → Notificações → Ohayo** ou **Ajustes do Sistema → Privacidade e

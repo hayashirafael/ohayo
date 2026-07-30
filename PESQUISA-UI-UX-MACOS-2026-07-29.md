@@ -9,6 +9,11 @@ Plataforma mínima observada: macOS 13 (`Package.swift:6`)
 > mudanças de UI/UX realizadas em 29 de julho de 2026; elas não devem ser lidas
 > como descrição do código atual. O status pós-implementação está resumido
 > abaixo.
+>
+> **Decisão posterior de produto:** Geral voltou para a sidebar da janela
+> central do Ohayo. Essa decisão substitui a recomendação histórica de manter
+> Ajustes em uma janela separada; o restante do documento foi preservado como
+> registro da pesquisa.
 
 ## Resultado executivo
 
@@ -31,7 +36,7 @@ O app já tem fundamentos bons: usa componentes nativos de SwiftUI, um `MenuBarE
 
 | Frente | Status | Entregue no código atual | Validação ou trabalho restante |
 |---|---|---|---|
-| Janela operacional e Ajustes | Implementado | Janela “Ohayo” redimensionável com Agendamentos, Contas e Histórico; Geral em uma cena `Settings`; ações de janela centralizadas em `AppWindowActions` | Validar o app empacotado no macOS 13, incluindo Ajustes…, Command-Comma e retorno dos deep links |
+| Janela central | Implementado | Janela “Ohayo” redimensionável com Agendamentos, Contas, Histórico e Geral; abertura e foco centralizados em `AppWindowActions` | Validar o app empacotado no macOS 13 e o retorno dos deep links |
 | Painel da barra de menus | Implementado | Saúde, estados vazios acionáveis, próximo Disparo dominante, CLI ausente acionável e Sair no menu secundário | Percorrer em runtime todos os estados waiting, paused, unavailable, needs-attention e CLI ausente |
 | Formulário de Agendamento | Implementado | `Picker` em radio group, editor multilinha, scroll, rodapé fixo e disclosure único de opções avançadas | Validar foco, Tab/Shift-Tab, Return, Escape, VoiceOver e persistência dos três modos de execução |
 | Feedback e ações destrutivas | Implementado | Progresso/resultado de “Executar agora” e confirmação de remoção de Conta com impacto nos Agendamentos | Validar visualmente sucesso, Terminal aberto, falha e pluralização 0/1/N da confirmação |
@@ -43,11 +48,11 @@ O app já tem fundamentos bons: usa componentes nativos de SwiftUI, um `MenuBarE
 ### Validação manual pendente
 
 Além dos testes automatizados, uma cópia empacotada com bundle e preferências
-isolados foi inspecionada em Dark Mode: guia inicial, janela operacional,
-formulário, empty states de Agendamentos/Contas/Histórico, Ajustes nativos,
-Command-Comma e painel da barra. Ainda é necessário validar manualmente:
+isolados foi inspecionada em Dark Mode: guia inicial, janela central,
+formulário, empty states de Agendamentos/Contas/Histórico, Geral e painel da
+barra. Ainda é necessário validar manualmente:
 
-- abrir Ajustes pelo painel e por Command-Comma no macOS 13;
+- abrir Geral pelo painel no macOS 13;
 - criar e editar Agendamentos Claude, Codex e shell nos três modos de execução;
 - percorrer painel, janela operacional, formulário, Histórico, Contas e
   permissões com VoiceOver e Full Keyboard Access;

@@ -42,16 +42,10 @@ struct OhayoApp: App {
         .menuBarExtraStyle(.window)
 
         Window("Ohayo", id: "schedule") {
-            SettingsView(state: env.state, env: env)
+            SettingsView(state: env.state, env: env, updater: updater)
         }
         .defaultSize(width: 820, height: 600)
         .windowResizability(.contentMinSize)
-
-        Settings {
-            GeneralTab(state: env.state, updater: updater)
-                .frame(width: 620)
-                .frame(minHeight: 430)
-        }
 
         Window(env.state.strings.permissionGuideTitle, id: "permissions") {
             PermissionSetupView(state: env.state)

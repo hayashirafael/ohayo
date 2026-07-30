@@ -75,7 +75,7 @@ brew install --cask ohayo
 
 Ohayo is a clean install. Remove any previous installation completely before
 installing the first Sparkle-enabled version. After that bootstrap install,
-future releases can be installed from **Settings… → About → Check for
+future releases can be installed from **Ohayo → General → About → Check for
 Updates…**.
 
 ### DMG
@@ -108,7 +108,7 @@ open build/Ohayo.app
 Version 1.2.0 is the updater bootstrap. Existing installations without Sparkle
 need this one final manual Homebrew/DMG upgrade. From 1.2.0 onward, Ohayo checks
 the signed release feed daily and offers **Install and Relaunch** in-app. Use
-**Settings… → About → Check for Updates…** to check immediately.
+**Ohayo → General → About → Check for Updates…** to check immediately.
 
 Even in the free tester mode, release archives and the feed are
 cryptographically validated by Sparkle's separate EdDSA key. Apple Developer
@@ -118,10 +118,11 @@ the final DMG and its signed `appcast.xml` together.
 
 ## Usage
 
-Ohayo lives in the menu bar (no Dock icon). The icon is filled while any
-account has an active window, shows `!` on error, and fades when every
-scheduled account is paused; optionally it also shows the time until the
-soonest window expires.
+Ohayo lives in the menu bar with no permanent Dock icon. macOS shows a Dock
+icon only while a standard Ohayo window is open so that window can receive
+focus. The menu bar icon is filled while any account has an active window,
+shows `!` on error, and fades when every scheduled account is paused;
+optionally it also shows the time until the soonest window expires.
 
 Clicking the icon opens a panel with the next scheduled runs across all
 accounts — how many is configurable in **General** (1–5, default 1) —
@@ -135,8 +136,8 @@ waiting for the next window/time). Clicking a card or row opens
 warning; Settings, Permissions, and **Quit Ohayo** are grouped under the
 secondary actions menu.
 
-The operational **Ohayo** window opens on **Schedules** and has a sidebar
-with three sections:
+The central **Ohayo** window opens on **Schedules** and has a sidebar with four
+sections:
 
 - **Accounts** — for each account, the logged-in identity / alias, provider
   with its icon, local folder, how many active schedules target it, and
@@ -161,12 +162,10 @@ with three sections:
 - **History** — recent runs as cards with status, provider icon, model,
   account alias/email, command, response and error details; filterable by
   account the same way as Schedules
-
-General preferences live in the native **Settings…** window instead of the
-operational sidebar: Launch at Login, time remaining in the menu bar,
-sensitive notification details (off by default), how many upcoming runs the
-menu panel shows (1–5), Language (English or Portuguese), system access, and
-the app version and **Check for Updates…**.
+- **General** — Launch at Login, time remaining in the menu bar, sensitive
+  notification details (off by default), how many upcoming runs the menu panel
+  shows (1–5), Language (English or Portuguese), system access, the app
+  version, and **Check for Updates…**
 
 ### First-run permissions
 
@@ -177,7 +176,7 @@ they never execute a prompt, start a login, or consume quota. You can also
 allow notifications, test the Terminal automation used for interactive
 sessions, and optionally enable Launch at Login. Closing the guide does not
 disable the app; reopen it from the menu panel’s secondary actions or
-**Settings… → System Access → Permissions…**.
+**Ohayo → General → System Access → Permissions…**.
 
 If notifications or Terminal automation were denied, change them in **System
 Settings → Notifications → Ohayo** or **System Settings → Privacy & Security →
