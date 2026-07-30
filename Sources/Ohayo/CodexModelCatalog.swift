@@ -10,6 +10,11 @@ struct CodexModelOption: Equatable, Identifiable {
     var id: String { slug }
 }
 
+struct CodexModelSelection: Equatable {
+    let modelSlug: String
+    let reasoning: Message.CodexReasoning?
+}
+
 enum CodexModelCatalog {
     /// Fallback publicado pelo produto Codex. O cache de cada conta continua
     /// sendo a fonte preferida porque disponibilidade e efforts podem variar.
@@ -74,6 +79,32 @@ enum CodexModelCatalog {
             return nil
         }
         return defaultReasoning
+    }
+
+    static func normalizedSelection(
+        modelSlug: String,
+        reasoning: Message.CodexReasoning?,
+        in models: [CodexModelOption],
+        preservesUnknownModel: Bool
+    ) -> CodexModelSelection {
+        let hasKnownModel = modelSlug.isEmpty
+            || models.contains(where: { $0.slug == modelSlug })
+        guard hasKnownModel else {
+            return preservesUnknownModel
+                ? CodexModelSelection(
+                    modelSlug: modelSlug,
+                    reasoning: reasoning
+                )
+                : CodexModelSelection(modelSlug: "", reasoning: nil)
+        }
+        return CodexModelSelection(
+            modelSlug: modelSlug,
+            reasoning: normalizedReasoning(
+                reasoning,
+                for: modelSlug,
+                in: models
+            )
+        )
     }
 
     private static func localizedFallbackModels(

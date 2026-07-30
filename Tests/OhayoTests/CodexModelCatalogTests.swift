@@ -122,4 +122,38 @@ final class CodexModelCatalogTests: XCTestCase {
             ]
         )
     }
+
+    func testTrocaDeContaDescartaModeloEReasoningIndisponiveis() {
+        let models = [
+            CodexModelOption(
+                slug: "modelo-da-conta-b",
+                displayName: "Modelo B",
+                description: "",
+                supportedReasoning: [.low, .medium],
+                defaultReasoning: .medium
+            ),
+        ]
+
+        XCTAssertEqual(
+            CodexModelCatalog.normalizedSelection(
+                modelSlug: "modelo-da-conta-a",
+                reasoning: .ultra,
+                in: models,
+                preservesUnknownModel: false
+            ),
+            CodexModelSelection(modelSlug: "", reasoning: nil)
+        )
+        XCTAssertEqual(
+            CodexModelCatalog.normalizedSelection(
+                modelSlug: "modelo-da-conta-a",
+                reasoning: .ultra,
+                in: models,
+                preservesUnknownModel: true
+            ),
+            CodexModelSelection(
+                modelSlug: "modelo-da-conta-a",
+                reasoning: .ultra
+            )
+        )
+    }
 }

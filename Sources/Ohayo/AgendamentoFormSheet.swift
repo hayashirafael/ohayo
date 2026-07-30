@@ -100,7 +100,7 @@ struct AgendamentoFormSheet: View {
             // O estado (kind/account/skill/…) já nasceu correto no `init`;
             // aqui só o efeito colateral de revarrer o disco é necessário.
             refreshSkills()
-            refreshCodexModels()
+            refreshCodexModels(preservesUnknownModel: true)
         }
         .onChange(of: draft.account) { _ in
             refreshSkills()
@@ -698,7 +698,9 @@ struct AgendamentoFormSheet: View {
         }
     }
 
-    private func refreshCodexModels() {
+    private func refreshCodexModels(
+        preservesUnknownModel: Bool = false
+    ) {
         guard draft.kind == .codex else { return }
         let directory = draft.account.map {
             URL(fileURLWithPath: $0, isDirectory: true)
@@ -711,11 +713,14 @@ struct AgendamentoFormSheet: View {
             strings: state.strings
         )
         codexModels = models
-        draft.codexReasoning = CodexModelCatalog.normalizedReasoning(
-            draft.codexReasoning,
-            for: draft.codexModel,
-            in: models
+        let selection = CodexModelCatalog.normalizedSelection(
+            modelSlug: draft.codexModel,
+            reasoning: draft.codexReasoning,
+            in: models,
+            preservesUnknownModel: preservesUnknownModel
         )
+        draft.codexModel = selection.modelSlug
+        draft.codexReasoning = selection.reasoning
     }
 
     private var selectedWorkingDirectoryURL: URL? {
