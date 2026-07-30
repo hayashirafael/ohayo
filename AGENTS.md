@@ -27,8 +27,6 @@ Avoid reviving the legacy product terms “HiClaude”, “renewal”, “messag
    file and the source.
 4. `README.md` is English and `README.pt-br.md` is Portuguese; keep them
    semantically synchronized.
-5. `PESQUISA-UI-UX-MACOS-2026-07-29.md` is historical research. Its explicit
-   later product decisions override the original recommendations.
 
 If documentation and implementation disagree, verify the implementation and
 update both language variants in the same change.

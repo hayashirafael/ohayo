@@ -24,7 +24,7 @@ Use the canonical triage labels: `needs-triage`, `needs-info`, `ready-for-agent`
 
 ### Domain docs
 
-This is a single-context repository with `CONTEXT.md` and ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+This is a single-context repository with its glossary in `CONTEXT.md`. See `docs/agents/domain.md`.
 
 ## Domain vocabulary
 
