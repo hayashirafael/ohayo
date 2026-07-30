@@ -14,8 +14,9 @@ struct TerminalLaunchSpec: Equatable {
     /// Diretório de trabalho resolvido (o do workspace do app quando a
     /// mensagem não define um).
     let workingDir: String
-    /// Somente o workspace criado/controlado pelo Ohayo pode receber trust
-    /// automático. Projetos explícitos preservam o prompt do Claude.
+    /// Somente o workspace criado/controlado pelo Ohayo precisa ser criado
+    /// antes do launch. Projetos explícitos já existem e foram escolhidos pela
+    /// pessoa no formulário.
     let usesOhayoManagedWorkspace: Bool
 }
 
@@ -26,6 +27,12 @@ struct TerminalLauncher: TerminalLaunching {
     var claudeBinaryOverride: URL?
     var codexBinaryOverride: URL?
     var defaultWorkspaceOverride: URL?
+    var directoryCreator: (String) -> Void = { path in
+        try? FileManager.default.createDirectory(
+            atPath: path,
+            withIntermediateDirectories: true
+        )
+    }
     var appleScriptRunner: (String) -> Result<Void, RunnerError> = Self.runAppleScript
 
     func launch(
@@ -57,13 +64,15 @@ struct TerminalLauncher: TerminalLaunching {
         ) else {
             return .failure(.cliNotFound(message.kind == .codex ? .codex : .claude))
         }
-        // Garante o diretório de trabalho. Só o workspace padrão, criado e
-        // controlado pelo Ohayo, recebe trust automático; projetos escolhidos
-        // preservam o prompt visível do Claude no Terminal.
+        // Só o workspace padrão pertence ao Ohayo e pode ser criado pelo app.
+        // Projetos escolhidos já existem: não tenta criá-los nem escrever
+        // conteúdo neles antes de entregar a sessão ao Terminal.
         // Falha no seed não impede o launch: no pior caso o prompt aparece.
-        try? FileManager.default.createDirectory(
-            atPath: spec.workingDir, withIntermediateDirectories: true)
-        if message.kind == .claude, spec.usesOhayoManagedWorkspace {
+        if spec.usesOhayoManagedWorkspace {
+            directoryCreator(spec.workingDir)
+        }
+        if message.kind == .claude,
+           message.resolvedTrustWorkingDirectory {
             Self.seedTrust(accountDir: spec.accountDir, workingDir: spec.workingDir)
         }
         // O script vai num arquivo temporário em vez de embutido no
@@ -167,11 +176,25 @@ struct TerminalLauncher: TerminalLaunching {
         let account = preparedPlan?.account ?? ProviderAccountContext(
             provider: provider, configDirectory: messageConfigDir
         )
-        let args = preparedPlan?.terminalArguments
+        var args = preparedPlan?.terminalArguments
             ?? ProviderDispatchPlan(
                 message: message,
                 account: account
             ).terminalArguments
+        if provider == .codex,
+           message.resolvedTrustWorkingDirectory {
+            // O workingDir persistido veio do picker e representa o
+            // consentimento único da pessoa. Confia apenas esta invocação:
+            // não reserializa nem altera o config.toml da conta.
+            let insertionIndex = max(0, args.count - 1)
+            args.insert(
+                contentsOf: [
+                    "-c",
+                    codexTrustOverride(workingDir: workingDir),
+                ],
+                at: insertionIndex
+            )
+        }
         let envValue = account.configDirectory.path
         // Sem `export PATH`: o Terminal abre um login shell com o PATH do
         // próprio usuário, e o binário é invocado por caminho absoluto —
@@ -189,8 +212,10 @@ struct TerminalLauncher: TerminalLaunching {
         }
         let terminalScript = [
             accountEnvironment,
-            "cd \(shellQuote(workingDir))",
-            command
+            // Se o projeto foi removido, ficou inacessível ou perdeu a
+            // permissão TCC, não executa no diretório inicial do Terminal
+            // (frequentemente o home) por acidente.
+            "cd \(shellQuote(workingDir)) && \(command)"
         ].joined(separator: "; ")
         return TerminalLaunchSpec(
             terminalScript: terminalScript,
@@ -205,9 +230,9 @@ struct TerminalLauncher: TerminalLaunching {
         AppPaths.workspaceDirectory()
     }
 
-    /// Pré-confia o workspace controlado pelo Ohayo em
-    /// `projects["<pasta>"]` no `.claude.json` da conta. O chamador deve
-    /// manter projetos explícitos fora deste helper.
+    /// Pré-confia o diretório persistido pelo Ohayo em
+    /// `projects["<pasta>"]` no `.claude.json` da conta. Para um projeto
+    /// explícito, a seleção no formulário é o consentimento da pessoa.
     /// O consentimento mais amplo para imports externos do CLAUDE.md não é
     /// antecipado: quando aplicável, o Claude mantém seu diálogo visível no
     /// Terminal para que a pessoa decida com os arquivos listados.
@@ -253,6 +278,35 @@ struct TerminalLauncher: TerminalLaunching {
         if let data = try? JSONSerialization.data(withJSONObject: root) {
             try? data.write(to: url, options: .atomic)
         }
+    }
+
+    /// Override efêmero oficial do Codex. A chave intermediária é um basic
+    /// string TOML porque caminhos podem conter pontos, espaços e aspas.
+    static func codexTrustOverride(workingDir: String) -> String {
+        let canonical = URL(fileURLWithPath: workingDir)
+            .resolvingSymlinksInPath()
+            .path
+        return "projects.\"\(tomlBasicString(canonical))\".trust_level=\"trusted\""
+    }
+
+    private static func tomlBasicString(_ value: String) -> String {
+        var escaped = ""
+        for scalar in value.unicodeScalars {
+            switch scalar.value {
+            case 0x08: escaped += "\\b"
+            case 0x09: escaped += "\\t"
+            case 0x0A: escaped += "\\n"
+            case 0x0C: escaped += "\\f"
+            case 0x0D: escaped += "\\r"
+            case 0x22: escaped += "\\\""
+            case 0x5C: escaped += "\\\\"
+            case 0x00...0x1F, 0x7F:
+                escaped += String(format: "\\u%04X", scalar.value)
+            default:
+                escaped.unicodeScalars.append(scalar)
+            }
+        }
+        return escaped
     }
 
     static func appleScript(forTerminalScript terminalScript: String) -> String {

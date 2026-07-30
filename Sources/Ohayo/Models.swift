@@ -67,6 +67,10 @@ struct Message: Codable, Identifiable {
     var safeMode: Bool? = nil
     var configDir: String? = nil
     var workingDir: String? = nil
+    /// Consentimento para o Ohayo pré-autorizar o trust básico do projeto.
+    /// `nil` preserva o comportamento dos agendamentos anteriores, nos quais
+    /// escolher a pasta já representava esse consentimento; `false` revoga.
+    var trustWorkingDirectory: Bool? = nil
     var uid: UUID? = nil
     var showResponse: Bool? = nil
     var runInTerminal: Bool? = nil
@@ -88,13 +92,16 @@ struct Message: Codable, Identifiable {
         let safeModeValue = safeMode.map(String.init) ?? ""
         let showResponseValue = showResponse.map(String.init) ?? ""
         let runInTerminalValue = runInTerminal.map(String.init) ?? ""
+        let trustWorkingDirectoryValue =
+            trustWorkingDirectory.map(String.init) ?? ""
         let timeoutValue = timeoutSeconds.map(String.init) ?? ""
         let notifyOnSuccessValue = notifyOnSuccess.map(String.init) ?? ""
         let reasoningValue = codexReasoning?.rawValue ?? ""
         let values = [
             kind.rawValue, text, modelValue, effortValue, safeModeValue,
             configDir ?? "", workingDir ?? "", showResponseValue,
-            runInTerminalValue, timeoutValue, notifyOnSuccessValue,
+            runInTerminalValue, trustWorkingDirectoryValue, timeoutValue,
+            notifyOnSuccessValue,
             codexModel ?? "", reasoningValue, skill ?? ""
         ]
         return values.joined(separator: "\u{1}")
@@ -106,6 +113,7 @@ extension Message: Equatable {
         lhs.text == rhs.text && lhs.kind == rhs.kind && lhs.model == rhs.model
             && lhs.effort == rhs.effort && lhs.safeMode == rhs.safeMode
             && lhs.configDir == rhs.configDir && lhs.workingDir == rhs.workingDir
+            && lhs.trustWorkingDirectory == rhs.trustWorkingDirectory
             && lhs.showResponse == rhs.showResponse
             && lhs.runInTerminal == rhs.runInTerminal
             && lhs.timeoutSeconds == rhs.timeoutSeconds
@@ -156,6 +164,16 @@ extension Message {
         case .shell: return false
         }
     }
+    /// O workspace interno pertence ao Ohayo e é sempre confiável. Pastas
+    /// escolhidas em versões anteriores também mantêm o consentimento
+    /// implícito; somente `false` persistido devolve o prompt ao provider.
+    var resolvedTrustWorkingDirectory: Bool {
+        guard kind != .shell else { return false }
+        let hasExplicitDirectory =
+            workingDir?.trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty == false
+        return !hasExplicitDirectory || trustWorkingDirectory ?? true
+    }
     /// Terminal interativo não tem processo filho monitorado pelo Ohayo, então
     /// não existe timeout aplicável nesse modo.
     var resolvedTimeoutSeconds: Int? {
@@ -173,16 +191,16 @@ struct ScheduledTask: Identifiable, Equatable {
     var repetition: Repetition = .fixed
     var times: [Int] = []
     var weekdays: Set<Int> = []
-    /// `nil` identifica agendamentos anteriores ao consentimento explícito.
-    /// Como versões publicadas não iniciavam uma janela sem evidência, o
-    /// fallback seguro é `false`. Novos formulários persistem a escolha.
+    /// `nil` identifica agendamentos anteriores ao auto-início explícito.
+    /// Contínuos legados passam a iniciar a primeira janela automaticamente;
+    /// um `false` persistido continua sendo a revogação explícita.
     var bootstrapWhenInactive: Bool? = nil
     var enabled: Bool = true
 
     var id: UUID { uid }
     var resolvedCommand: Message { command ?? AppState.defaultMessage }
     var resolvedBootstrapWhenInactive: Bool {
-        bootstrapWhenInactive ?? false
+        bootstrapWhenInactive ?? (repetition == .continuous)
     }
 
     /// Identidade do payload executável usada para invalidar outcomes que
@@ -200,6 +218,7 @@ struct ScheduledTask: Identifiable, Equatable {
         values.append(message.safeMode.map(String.init) ?? "")
         values.append(message.configDir ?? "")
         values.append(message.workingDir ?? "")
+        values.append(message.trustWorkingDirectory.map(String.init) ?? "")
         values.append(message.showResponse.map(String.init) ?? "")
         values.append(message.runInTerminal.map(String.init) ?? "")
         values.append(message.timeoutSeconds.map(String.init) ?? "")

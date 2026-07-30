@@ -193,6 +193,8 @@ struct AgendamentoFormSheet: View {
                              skill: skillBinding,
                              availableSkills: availableSkills,
                              workingDir: $draft.workingDir,
+                             trustWorkingDirectory:
+                                $draft.trustWorkingDirectory,
                              accounts: state.accounts(for: .claude),
                              accountLabel: { state.label(for: $0) },
                              strings: strings,
@@ -204,6 +206,8 @@ struct AgendamentoFormSheet: View {
                             skill: skillBinding,
                             availableSkills: availableSkills,
                             workingDir: $draft.workingDir,
+                            trustWorkingDirectory:
+                                $draft.trustWorkingDirectory,
                             accounts: state.accounts(for: .codex),
                             accountLabel: { state.label(for: $0) },
                             strings: strings,
@@ -474,6 +478,8 @@ struct AgendamentoFormSheet: View {
             return strings.continuousConflict
         case .accountUnavailable:
             return strings.accountFolderMissing
+        case .workingDirectoryUnavailable:
+            return strings.workingDirectoryAuthorizationDenied
         }
     }
 

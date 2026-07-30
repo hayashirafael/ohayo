@@ -102,4 +102,46 @@ final class UXAccessibilityLocalizationTests: XCTestCase {
             "Buscar atualizações…"
         )
     }
+
+    func testDiretorioPadraoDaInterfaceEhOWorkspaceDoOhayo() {
+        XCTAssertEqual(
+            L10n(language: .english).workingDirectoryDefault,
+            "Directory (Ohayo workspace by default)"
+        )
+        XCTAssertEqual(
+            L10n(language: .portuguese).workingDirectoryDefault,
+            "Diretório (workspace do Ohayo por padrão)"
+        )
+    }
+
+    func testPickerEConsentimentoExplicamTrustDaPasta() {
+        XCTAssertTrue(
+            L10n(language: .english).workingDirectoryTrustNotice.contains(
+                "pre-authorize project trust"
+            )
+        )
+        XCTAssertTrue(
+            L10n(language: .portuguese).workingDirectoryTrustNotice.contains(
+                "pré-autorize o trust do projeto"
+            )
+        )
+        XCTAssertEqual(
+            L10n(language: .english).trustWorkingDirectory,
+            "Trust this folder for Claude/Codex"
+        )
+        XCTAssertEqual(
+            L10n(language: .portuguese).trustWorkingDirectory,
+            "Confiar nesta pasta para Claude/Codex"
+        )
+        XCTAssertTrue(
+            L10n(language: .portuguese).trustWorkingDirectoryHelp.contains(
+                "ao salvar"
+            )
+        )
+        XCTAssertTrue(
+            L10n(language: .portuguese).trustWorkingDirectoryHelp.contains(
+                "altere arquivos nela"
+            )
+        )
+    }
 }

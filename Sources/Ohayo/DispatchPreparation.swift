@@ -83,16 +83,19 @@ struct ProviderDispatchPlan: Equatable {
                     "model_reasoning_effort=\"\(reasoning.rawValue)\"",
                 ]
             }
+            let sandbox = message.resolvedTrustWorkingDirectory
+                ? "workspace-write"
+                : "read-only"
             batchArguments = ["exec"]
                 + modelArguments
                 + [
-                    "--sandbox", "read-only",
+                    "--sandbox", sandbox,
                     "--skip-git-repo-check",
                     "--color", "never",
                 ]
                 + reasoningArguments
             terminalArguments = modelArguments
-                + ["--sandbox", "read-only"]
+                + ["--sandbox", sandbox]
                 + reasoningArguments
                 + [message.resolvedPromptText]
         }

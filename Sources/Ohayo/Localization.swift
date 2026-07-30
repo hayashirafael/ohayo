@@ -483,7 +483,34 @@ struct L10n {
     var codexDefault: String { text(en: "Default (~/.codex)", pt: "Padrão (~/.codex)") }
     var accountDefaultModel: String { text(en: "Model (account default)", pt: "Modelo (padrão da conta)") }
     var workingDirectoryDefault: String {
-        text(en: "Directory (~ by default)", pt: "Diretório (~ por padrão)")
+        text(
+            en: "Directory (Ohayo workspace by default)",
+            pt: "Diretório (workspace do Ohayo por padrão)"
+        )
+    }
+    var workingDirectoryTrustNotice: String {
+        text(
+            en: "Choose the folder where this schedule should run. After choosing, you can let Ohayo request access and pre-authorize project trust.",
+            pt: "Escolha a pasta onde este agendamento deve executar. Depois, você poderá permitir que o Ohayo solicite acesso e pré-autorize o trust do projeto."
+        )
+    }
+    var trustWorkingDirectory: String {
+        text(
+            en: "Trust this folder for Claude/Codex",
+            pt: "Confiar nesta pasta para Claude/Codex"
+        )
+    }
+    var trustWorkingDirectoryHelp: String {
+        text(
+            en: "Ohayo requests folder access when you save, lets Codex change files inside it, and avoids the basic project trust prompt in future runs.",
+            pt: "O Ohayo solicita acesso à pasta ao salvar, permite que o Codex altere arquivos nela e evita o prompt básico de confiança nas próximas execuções."
+        )
+    }
+    var workingDirectoryAuthorizationDenied: String {
+        text(
+            en: "Ohayo could not access this folder. Choose it again and allow access, or turn off folder trust.",
+            pt: "O Ohayo não conseguiu acessar esta pasta. Escolha-a novamente e permita o acesso, ou desative a confiança na pasta."
+        )
     }
     var chooseDirectory: String { text(en: "Choose", pt: "Escolher") }
     var clearWorkingDirectory: String {

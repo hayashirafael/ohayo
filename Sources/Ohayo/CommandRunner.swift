@@ -30,18 +30,31 @@ struct CommandRunner: CommandRunning {
     private let timeoutOverride: TimeInterval?
     var binaryOverride: URL? // testes
     var shellOverride: URL? // testes
+    private let defaultProviderWorkingDirectory: URL
+    private let directoryCreator: (URL) throws -> Void
     private let processRuntime: any CLIProcessRunning
 
     init(
         timeout: TimeInterval? = nil,
         binaryOverride: URL? = nil,
         shellOverride: URL? = nil,
+        defaultProviderWorkingDirectory: URL =
+            AppPaths.workspaceDirectory(),
+        directoryCreator: @escaping (URL) throws -> Void = { directory in
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        },
         processRuntime: any CLIProcessRunning =
             SystemCLIProcessRuntime()
     ) {
         timeoutOverride = timeout
         self.binaryOverride = binaryOverride
         self.shellOverride = shellOverride
+        self.defaultProviderWorkingDirectory =
+            defaultProviderWorkingDirectory
+        self.directoryCreator = directoryCreator
         self.processRuntime = processRuntime
     }
 
@@ -157,14 +170,16 @@ struct CommandRunner: CommandRunning {
             arguments = ["-l", "-c", message.text]
         }
         let home = NSHomeDirectory()
-        // Diretório de trabalho: override da mensagem (se não vazio) senão o home.
-        let defaultWorkingDirectory =
+        // Providers sem override rodam no workspace neutro do app. Usar o
+        // home fazia o CLI herdar contexto amplo e tocar pastas protegidas
+        // (Documents/Desktop) como processo responsável do Ohayo.
+        let defaultShellWorkingDirectory =
             FileManager.default.homeDirectoryForCurrentUser
         let workingDirectory: URL
         switch dispatch.target {
         case .shell(let preparedWorkingDirectory):
             workingDirectory =
-                preparedWorkingDirectory ?? defaultWorkingDirectory
+                preparedWorkingDirectory ?? defaultShellWorkingDirectory
         case .provider:
             if let wd = message.workingDir,
                !wd.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -173,7 +188,12 @@ struct CommandRunner: CommandRunning {
                         NSString(string: wd).expandingTildeInPath
                 )
             } else {
-                workingDirectory = defaultWorkingDirectory
+                workingDirectory = defaultProviderWorkingDirectory
+                do {
+                    try directoryCreator(workingDirectory)
+                } catch {
+                    return .failure(.failed(error.localizedDescription))
+                }
             }
         }
 

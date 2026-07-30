@@ -98,6 +98,103 @@ final class AgendamentoEditorTests: XCTestCase {
         XCTAssertNil(draft.skill)
     }
 
+    func testTrustDaPastaEhPersistidoApenasQuandoRevogado() {
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "revisar"
+        draft.workingDir = "/tmp/projeto"
+
+        XCTAssertNil(
+            draft.normalizedTask().resolvedCommand.trustWorkingDirectory
+        )
+
+        draft.trustWorkingDirectory = false
+        let normalized = draft.normalizedTask()
+        let restored = AgendamentoDraft(editing: normalized)
+
+        XCTAssertEqual(
+            normalized.resolvedCommand.trustWorkingDirectory,
+            false
+        )
+        XCTAssertFalse(restored.trustWorkingDirectory)
+    }
+
+    func testSalvarComTrustSolicitaAcessoAntesDePersistir() {
+        let state = makeState()
+        var authorizedURLs: [URL] = []
+        let editor = AgendamentoEditor(
+            state: state,
+            isDirectory: { _ in true },
+            authorizeDirectory: {
+                authorizedURLs.append($0)
+                return true
+            }
+        )
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "revisar"
+        draft.workingDir = "/tmp/../tmp/projeto"
+
+        let result = editor.apply(.save(draft))
+
+        guard case .success = result else {
+            return XCTFail("save deveria ser autorizado")
+        }
+        XCTAssertEqual(
+            authorizedURLs,
+            [URL(fileURLWithPath: "/tmp/projeto")]
+        )
+        XCTAssertEqual(state.tasks.count, 1)
+    }
+
+    func testSalvarComAcessoNegadoNaoPersisteAgendamento() {
+        let state = makeState()
+        let editor = AgendamentoEditor(
+            state: state,
+            isDirectory: { _ in true },
+            authorizeDirectory: { _ in false }
+        )
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "revisar"
+        draft.workingDir = "/Volumes/protegido"
+
+        let result = editor.apply(.save(draft))
+
+        XCTAssertEqual(
+            result,
+            .failure(.invalid([
+                .workingDirectoryUnavailable(
+                    URL(fileURLWithPath: "/Volumes/protegido")
+                ),
+            ]))
+        )
+        XCTAssertTrue(state.tasks.isEmpty)
+    }
+
+    func testSalvarSemTrustNaoSolicitaAcessoAntecipado() {
+        let state = makeState()
+        var authorizationCalls = 0
+        let editor = AgendamentoEditor(
+            state: state,
+            isDirectory: { _ in true },
+            authorizeDirectory: { _ in
+                authorizationCalls += 1
+                return false
+            }
+        )
+        var draft = AgendamentoDraft(editing: nil)
+        draft.text = "revisar"
+        draft.workingDir = "/Volumes/protegido"
+        draft.trustWorkingDirectory = false
+
+        guard case .success = editor.apply(.save(draft)) else {
+            return XCTFail("opt-out não deveria pedir acesso antecipado")
+        }
+        XCTAssertEqual(authorizationCalls, 0)
+        XCTAssertEqual(
+            state.tasks.first?.resolvedCommand.trustWorkingDirectory,
+            false
+        )
+    }
+
     func testContaExplicitaAusenteBloqueiaSaveSemVirarDefault() {
         let state = makeState()
         let editor = AgendamentoEditor(

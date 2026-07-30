@@ -55,6 +55,26 @@ final class TerminalLauncherTests: XCTestCase {
         XCTAssertEqual(spec.accountDir, nativeDir.path)
     }
 
+    func testDiretorioInacessivelInterrompeAntesDeExecutarOProvider() throws {
+        let binary = URL(fileURLWithPath: "/tmp/fake claude")
+        let message = Message(
+            text: "oi",
+            kind: .claude,
+            workingDir: "/tmp/projeto removido"
+        )
+
+        let spec = try XCTUnwrap(
+            TerminalLauncher.spec(for: message, claudeBinary: binary)
+        )
+
+        XCTAssertTrue(
+            spec.terminalScript.contains(
+                "cd '/tmp/projeto removido' && '/tmp/fake claude'"
+            ),
+            "falha no cd não pode deixar o CLI executar no home do Terminal"
+        )
+    }
+
     func testLaunchEscreveScriptEmArquivoTemporarioERodaViaSh() async throws {
         let captured = Captura()
         var launcher = TerminalLauncher(claudeBinaryOverride: URL(fileURLWithPath: "/tmp/fake claude"))
@@ -159,12 +179,12 @@ final class TerminalLauncherTests: XCTestCase {
         XCTAssertTrue(spec.usesOhayoManagedWorkspace)
     }
 
-    func testLaunchDeProjetoEscolhidoMantemPromptDeTrustVisivel() async throws {
+    func testLaunchDeProjetoEscolhidoPreAutorizaSomenteTrustBasico() async throws {
         let conta = try makeTempDir()
         let proj = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: conta); try? FileManager.default.removeItem(at: proj) }
-        // Projetos escolhidos/importados pertencem à pessoa: o Ohayo não pode
-        // responder automaticamente ao prompt de trust em nome dela.
+        // Escolher e persistir a pasta no formulário é o consentimento básico.
+        // Imports externos continuam dependendo da decisão explícita no Claude.
         let existente: [String: Any] = [
             "oauthAccount": ["emailAddress": "x@y.z"],
             "projects": ["/outra": ["hasTrustDialogAccepted": false, "allowedTools": ["Bash"]]]
@@ -180,19 +200,18 @@ final class TerminalLauncherTests: XCTestCase {
         guard case .success = await launcher.launchTestMessage(msg) else { return XCTFail() }
 
         let bytesAtualizados = try Data(contentsOf: jsonURL)
-        XCTAssertEqual(
-            bytesAtualizados,
-            bytesOriginais,
-            "o Ohayo não deve regravar o arquivo de identidade para um projeto escolhido"
-        )
         let atualizado = try JSONSerialization.jsonObject(with: bytesAtualizados) as! [String: Any]
         let projects = atualizado["projects"] as! [String: Any]
-        XCTAssertNil(
-            projects[proj.resolvingSymlinksInPath().path],
-            "o Ohayo não deve pré-aprovar o trust de um projeto escolhido"
+        let entrada = projects[proj.resolvingSymlinksInPath().path] as! [String: Any]
+        XCTAssertEqual(entrada["hasTrustDialogAccepted"] as? Bool, true)
+        XCTAssertNil(entrada["hasClaudeMdExternalIncludesApproved"])
+        XCTAssertNil(entrada["hasClaudeMdExternalIncludesWarningShown"])
+        XCTAssertEqual(
+            (atualizado["oauthAccount"] as? [String: String])?["emailAddress"],
+            "x@y.z"
         )
-        XCTAssertNotNil(atualizado["oauthAccount"])
         let outra = projects["/outra"] as! [String: Any]
+        XCTAssertEqual(outra["hasTrustDialogAccepted"] as? Bool, false)
         XCTAssertEqual(outra["allowedTools"] as? [String], ["Bash"])
     }
 
@@ -400,7 +419,9 @@ final class TerminalLauncherTests: XCTestCase {
         XCTAssertTrue(spec.terminalScript.contains("cd '/tmp/proj'"))
         XCTAssertTrue(spec.terminalScript.contains("'/tmp/fake-codex'"))
         XCTAssertTrue(spec.terminalScript.contains("'--model' 'gpt-5.5'"))
-        XCTAssertTrue(spec.terminalScript.contains("'--sandbox' 'read-only'"))
+        XCTAssertTrue(
+            spec.terminalScript.contains("'--sandbox' 'workspace-write'")
+        )
         XCTAssertTrue(spec.terminalScript.contains("'-c' 'model_reasoning_effort=\"high\"'"))
         XCTAssertTrue(spec.terminalScript.contains("'revise isso'"))
         XCTAssertFalse(spec.terminalScript.contains("'exec'"))

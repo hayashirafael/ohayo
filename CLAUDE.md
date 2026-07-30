@@ -35,8 +35,9 @@ account.
   `repetition`:
   - `continuous` — arms at the end of the detected window and chains 5h windows
     24/7; driven by `RenewalEngine`, keyed by the account the command targets.
-    New tasks persist `bootstrapWhenInactive` from an explicit UI choice;
-    missing values identify legacy tasks and resolve fail-closed to `false`.
+    New tasks default `bootstrapWhenInactive` to `true`; missing values identify
+    legacy continuous tasks and also resolve to `true`. A persisted explicit
+    `false` is the opt-out and must remain false.
     Max one continuous agendamento per account (`AppState.hasContinuousConflict`).
   - `fixed` — fixed times × weekdays (`AgendaMath`), driven by `TaskScheduler`,
     with a single catch-up on wake.
@@ -95,14 +96,15 @@ account.
   CLIs/login.
 - `RenewalEngine.swift` — accounts with a continuous agendamento; per-account
   timers armed at the detected window end. When no valid window exists, it
-  bootstraps only with explicit consent. A delivered attempt creates a
-  persisted five-hour cooldown across restarts; a scheduled hand-off keeps its
-  recovery independently from bootstrap consent, and real transcript evidence
-  replaces either timer. Transient failures retry with bounded exponential
-  backoff measured from the returned failure and a fresh transcript check.
-  `needsAttention` blocks without a periodic alert/cooldown until evidence
-  appears or the executable task payload changes. Consent is revalidated
-  immediately before and after the async dispatch.
+  bootstraps by default unless the task has an explicit persisted opt-out. A
+  delivered attempt creates a persisted five-hour cooldown across restarts; a
+  scheduled hand-off keeps its recovery independently from the automatic-start
+  policy, and real transcript evidence replaces either timer. Transient
+  failures retry with bounded exponential backoff measured from the returned
+  failure and a fresh transcript check. `needsAttention` blocks without a
+  periodic alert/cooldown until evidence appears or the executable task payload
+  changes. The automatic-start policy is revalidated immediately before and
+  after the async dispatch.
 - `SessionDetector.swift` — typed window state from transcripts:
   `active(until:)`, conclusively `inactive`, or fail-closed
   `unavailable(reason:)`. Production callers pass the persisted/request
@@ -119,27 +121,33 @@ account.
   transcripts subpath, usage-window duration, environment key, CLI binary name,
   display name.
 - `CommandRunner.swift` — subprocess: `claude -p --model … --effort …
-  [--safe-mode]`, `codex exec [--model …] --sandbox read-only …
-  [-c model_reasoning_effort=…]` (model/reasoning flags omitted when unset →
-  account default), or login-shell command. Claude/Codex prompts come from
-  stdin, not argv; shell remains `-l -c`. `ProviderAccountContext` applies the
-  correct native/custom environment. Timeouts come from the message, output is
-  capped as UTF-8-safe head + tail, and timeout termination targets only
-  positive PIDs observed in the process tree (SIGTERM then best-effort
+  [--safe-mode]`, `codex exec [--model …] --sandbox
+  <workspace-write|read-only>
+  --skip-git-repo-check --color never [-c model_reasoning_effort=…]`
+  (`workspace-write` for a trusted working directory, `read-only` after an
+  explicit opt-out; model/reasoning flags omitted when unset → account
+  default), or login-shell command. Claude/Codex prompts come from stdin, not
+  argv; shell remains `-l -c`. `ProviderAccountContext` applies the
+  correct native/custom environment. Provider batch runs without an explicit
+  working directory use `AppPaths.workspaceDirectory()` instead of the home;
+  shell keeps its historical home default. Timeouts come from the message,
+  output is capped as UTF-8-safe head + tail, and timeout termination targets
+  only positive PIDs observed in the process tree (SIGTERM then best-effort
   SIGKILL).
 - `TerminalLauncher.swift` — disparo interativo (`message.resolvedRunInTerminal`):
   abre uma sessão no Terminal.app via AppleScript rodando um `.sh` temporário
   privado (0600, traps de auto-`rm`, limpeza de resíduos antigos); aplica o
   contexto de conta correto e faz `cd` para o working dir
   (default `~/Library/Application Support/Ohayo/workspace` — nunca o home, cujo
-  trust não persiste). `seedTrust` pré-grava apenas esse workspace controlado
-  pelo Ohayo em `projects[<dir>]` no `.claude.json`, somente com
-  `hasTrustDialogAccepted`; diretórios escolhidos/importados ficam intactos e
-  deixam o Claude controlar o prompt de trust no Terminal quando necessário.
-  Nunca pré-aprova imports externos de `CLAUDE.md`; esse consentimento também
-  permanece visível. Usa o
-  mesmo `resolvedPromptText` do batch; só Claude toca no `.claude.json`, Codex
-  nunca.
+  trust não persiste). `seedTrust` grava `hasTrustDialogAccepted` em
+  `projects[<dir>]` no `.claude.json` para o workspace ou diretório cujo
+  `trustWorkingDirectory` efetivo esteja ativo, preservando o restante do
+  arquivo. Ao salvar, `AgendamentoEditor` tenta ler a pasta explícita para
+  disparar antecipadamente o consentimento TCC do macOS. Codex recebe somente
+  nesta invocação `-c projects."<dir>".trust_level="trusted"` quando esse
+  consentimento está ativo, e o `config.toml` permanece intacto. Nunca
+  pré-aprova imports externos de `CLAUDE.md`; esse consentimento também
+  permanece visível. Usa o mesmo `resolvedPromptText` do batch.
 - `AgendaMath.swift` — pure functions for the fixed cycle (times × weekdays):
   `nextOccurrence`, `lastMissedOccurrence` (single catch-up on wake), and
   `date(bySettingMinutes:ofDay:calendar:)`.
@@ -202,7 +210,11 @@ account.
   history behind a destructive confirmation), `GeneralTab` (including the
   default-off sensitive-notification-details toggle). The first-run
   `PermissionSetupView` embeds the passive Provider Doctor before the macOS
-  permission controls.
+  permission controls. `NSDocumentsFolderUsageDescription` is localized in the
+  packaged app, but macOS requests protected-folder access on first real use;
+  PermissionSetup cannot grant it. A stable Developer ID identity preserves
+  that TCC decision across releases, while ad-hoc local rebuilds may prompt
+  again.
 
 ## Commands
 
@@ -215,10 +227,10 @@ swift run Ohayo                 # run the menu bar app locally
 ./scripts/make-dmg.sh           # build/Ohayo-<version>.dmg
 ```
 
-Public tag releases are fail-closed: all Developer ID + notary secrets are
-required, tag version must match `Info.plist`, the app is signed with hardened
-runtime and the Apple Events entitlement, and the app is universal
-(`arm64` + `x86_64`) with deployment target macOS 13. The DMG is
+Public tag releases are fail-closed: all Developer ID, notarization, and
+Sparkle signing secrets are required, tag version must match `Info.plist`, the
+app is signed with hardened runtime and the Apple Events entitlement, and it is
+universal (`arm64` + `x86_64`) with deployment target macOS 13. The DMG is
 verified/mounted, then notarized and stapled; the mounted distributed app must
 pass Gatekeeper and a launch smoke before upload. Local ad-hoc builds remain
 supported but are not Gatekeeper-ready. Set

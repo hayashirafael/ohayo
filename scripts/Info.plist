@@ -22,6 +22,8 @@
     <key>SURequireSignedFeed</key><true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>Ohayo uses Terminal to open the Claude Code and Codex sessions you start.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Ohayo accesses only folders you select for scheduled Claude Code and Codex tasks.</string>
     <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>

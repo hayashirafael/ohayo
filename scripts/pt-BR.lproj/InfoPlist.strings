@@ -1,1 +1,2 @@
 "NSAppleEventsUsageDescription" = "O Ohayo usa o Terminal para abrir as sessões do Claude Code e Codex que você iniciar.";
+"NSDocumentsFolderUsageDescription" = "O Ohayo acessa somente as pastas que você escolher para tarefas agendadas do Claude Code e Codex.";
