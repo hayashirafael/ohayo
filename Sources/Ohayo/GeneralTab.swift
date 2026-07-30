@@ -64,15 +64,17 @@ struct GeneralTab: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                Button {
-                    updater.checkForUpdates()
-                } label: {
-                    Label(
-                        strings.checkForUpdates,
-                        systemImage: "arrow.triangle.2.circlepath"
-                    )
+                if updater.isSupported {
+                    Button {
+                        updater.checkForUpdates()
+                    } label: {
+                        Label(
+                            strings.checkForUpdates,
+                            systemImage: "arrow.triangle.2.circlepath"
+                        )
+                    }
+                    .disabled(!updater.canCheckForUpdates)
                 }
-                .disabled(!updater.canCheckForUpdates)
             }
         }
         .formStyle(.grouped)

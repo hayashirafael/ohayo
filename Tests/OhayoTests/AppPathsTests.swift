@@ -2,12 +2,41 @@ import XCTest
 @testable import Ohayo
 
 final class AppPathsTests: XCTestCase {
-    func testSupportWorkspaceAndLockUseOhayoDirectory() {
+    func testProductionSupportWorkspaceAndLockUseOhayoDirectory() {
         let home = URL(fileURLWithPath: "/tmp/ohayo-home")
         let support = home.appendingPathComponent("Library/Application Support/Ohayo")
 
-        XCTAssertEqual(AppPaths.supportDirectory(home: home), support)
-        XCTAssertEqual(AppPaths.workspaceDirectory(home: home), support.appendingPathComponent("workspace"))
-        XCTAssertEqual(AppPaths.instanceLockPath(home: home), support.appendingPathComponent("instance.lock").path)
+        XCTAssertEqual(
+            AppPaths.supportDirectory(profile: .production, home: home),
+            support
+        )
+        XCTAssertEqual(
+            AppPaths.workspaceDirectory(profile: .production, home: home),
+            support.appendingPathComponent("workspace")
+        )
+        XCTAssertEqual(
+            AppPaths.instanceLockPath(profile: .production, home: home),
+            support.appendingPathComponent("instance.lock").path
+        )
+    }
+
+    func testDevelopmentSupportWorkspaceAndLockUseOhayoDevDirectory() {
+        let home = URL(fileURLWithPath: "/tmp/ohayo-home")
+        let support = home.appendingPathComponent(
+            "Library/Application Support/Ohayo Dev"
+        )
+
+        XCTAssertEqual(
+            AppPaths.supportDirectory(profile: .development, home: home),
+            support
+        )
+        XCTAssertEqual(
+            AppPaths.workspaceDirectory(profile: .development, home: home),
+            support.appendingPathComponent("workspace")
+        )
+        XCTAssertEqual(
+            AppPaths.instanceLockPath(profile: .development, home: home),
+            support.appendingPathComponent("instance.lock").path
+        )
     }
 }

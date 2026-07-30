@@ -3,6 +3,21 @@ import XCTest
 
 @MainActor
 final class AppWindowActionsTests: XCTestCase {
+    func testUITestingArgumentExposesMainWindowOnlyInDevelopment() {
+        XCTAssertTrue(AppWindowActions.shouldExposeMainWindowForUITesting(
+            profile: .development,
+            arguments: ["Ohayo", "--ui-testing"]
+        ))
+        XCTAssertFalse(AppWindowActions.shouldExposeMainWindowForUITesting(
+            profile: .production,
+            arguments: ["Ohayo", "--ui-testing"]
+        ))
+        XCTAssertFalse(AppWindowActions.shouldExposeMainWindowForUITesting(
+            profile: .development,
+            arguments: ["Ohayo"]
+        ))
+    }
+
     func testPresentWindowClosesPanelAndOpensBeforeDeferredActivation() {
         var events: [String] = []
         var deferredAction: (@MainActor () -> Void)?

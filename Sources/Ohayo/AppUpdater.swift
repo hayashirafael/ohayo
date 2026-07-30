@@ -4,22 +4,30 @@ import Sparkle
 
 /// Ponte mínima entre o ciclo de atualização do Sparkle e a UI SwiftUI.
 ///
-/// O updater só é iniciado no `.app` empacotado. Isso mantém `swift run` e os
-/// testes utilizáveis, pois nesses contextos não há Info.plist nem bundle
-/// instalável para o Sparkle substituir.
+/// O updater só existe no perfil de produção. O canal de desenvolvimento
+/// mantém o framework para link/carregamento, mas não cria nem consulta o
+/// controller do Sparkle.
 @MainActor
 final class AppUpdater: ObservableObject {
     @Published private(set) var canCheckForUpdates = false
+    let isSupported: Bool
 
-    private let controller: SPUStandardUpdaterController
+    private let controller: SPUStandardUpdaterController?
     private var cancellable: AnyCancellable?
 
-    init(isBundled: Bool = Bundle.main.bundleIdentifier != nil) {
-        controller = SPUStandardUpdaterController(
-            startingUpdater: isBundled,
+    init(profile: AppRuntimeProfile = .current) {
+        isSupported = profile.supportsAppUpdates
+        guard isSupported else {
+            controller = nil
+            return
+        }
+
+        let controller = SPUStandardUpdaterController(
+            startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        self.controller = controller
 
         cancellable = controller.updater
             .publisher(for: \.canCheckForUpdates)
@@ -30,7 +38,7 @@ final class AppUpdater: ObservableObject {
     }
 
     func checkForUpdates() {
-        guard canCheckForUpdates else { return }
+        guard canCheckForUpdates, let controller else { return }
         controller.checkForUpdates(nil)
     }
 }

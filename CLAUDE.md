@@ -71,6 +71,9 @@ account.
   change provider.
 ## Architecture map
 
+- `AppRuntimeProfile.swift` — resolve produção somente para o bundle ID
+  oficial. `Ohayo Dev.app` e `swift run Ohayo` compartilham identidade de
+  desenvolvimento, preferências, Application Support e políticas isoladas.
 - `AppState.swift` — central observable state and UserDefaults persistence for
   unified agendamentos. Pause is per account: `pausedAccounts: Set<String>`
   (canonical paths, persisted). Typed renewal recovery
@@ -161,10 +164,11 @@ account.
   with matching manifests are exposed as `plugin:skill`. Responses are
   generation-guarded in the form so an old account lookup cannot overwrite a
   newer selection.
-- `SingleInstanceLock.swift` — `flock` on
-  `~/Library/Application Support/Ohayo/instance.lock`. A second launch
-  (dev binary or packaged .app) alerts and exits before `AppEnvironment`
-  exists, avoiding duplicate schedules and history clobbering.
+- `SingleInstanceLock.swift` — `flock` por perfil em
+  `~/Library/Application Support/Ohayo/instance.lock` ou
+  `~/Library/Application Support/Ohayo Dev/instance.lock`. Uma segunda
+  instância do mesmo perfil alerta e sai antes de `AppEnvironment` existir;
+  produção e desenvolvimento podem coexistir.
 - UI: `MenuBarLabel.swift` (just the bar glyph — filled while any account has
   an active window, `!` on error, faded when every scheduled account is
   paused; optional remaining-time text) + `MenuPanel.swift` (the
@@ -212,6 +216,8 @@ swift test                      # full suite
 swift test --filter <Class>     # focused
 swift run Ohayo                 # run the menu bar app locally
 ./scripts/make-app.sh           # build/Ohayo.app (ad-hoc unless Developer ID env is set)
+./scripts/make-dev-app.sh       # build/Ohayo Dev.app with isolated runtime identity
+open "build/Ohayo Dev.app" --args --ui-testing # expose central window for Computer Use
 ./scripts/make-dmg.sh           # build/Ohayo-<version>.dmg
 ```
 

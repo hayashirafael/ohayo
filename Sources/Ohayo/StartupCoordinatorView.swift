@@ -9,6 +9,7 @@ enum StartupCoordinator {
 struct StartupCoordinatorView: View {
     @ObservedObject var state: AppState
     let isBundled: Bool
+    let exposesMainWindowForUITesting: Bool
     @Environment(\.openWindow) private var openWindow
     @State private var evaluated = false
 
@@ -18,6 +19,15 @@ struct StartupCoordinatorView: View {
             .onAppear {
                 guard !evaluated else { return }
                 evaluated = true
+                if exposesMainWindowForUITesting {
+                    state.accountFilter = nil
+                    state.settingsSection = .geral
+                    AppWindowActions.presentWindow(
+                        closePanel: AppWindowActions.closeMenuBarPanel,
+                        openWindow: { openWindow(id: "schedule") }
+                    )
+                    return
+                }
                 if StartupCoordinator.shouldOpenGuide(
                     hasDismissed: state.hasDismissedPermissionGuide,
                     isBundled: isBundled

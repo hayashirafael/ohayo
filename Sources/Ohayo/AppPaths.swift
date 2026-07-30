@@ -1,18 +1,29 @@
 import Foundation
 
 enum AppPaths {
-    static func supportDirectory(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
-        home.appendingPathComponent("Library/Application Support/Ohayo")
+    static func supportDirectory(
+        profile: AppRuntimeProfile = .current,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        home.appendingPathComponent(
+            "Library/Application Support/\(profile.supportDirectoryName)"
+        )
     }
 
-    static func instanceLockPath(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
-        supportDirectory(home: home).appendingPathComponent("instance.lock").path
+    static func instanceLockPath(
+        profile: AppRuntimeProfile = .current,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> String {
+        supportDirectory(profile: profile, home: home)
+            .appendingPathComponent("instance.lock").path
     }
 
     static func workspaceDirectory(
+        profile: AppRuntimeProfile = .current,
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         fileManager: FileManager = .default
     ) -> URL {
-        supportDirectory(home: home).appendingPathComponent("workspace")
+        supportDirectory(profile: profile, home: home)
+            .appendingPathComponent("workspace")
     }
 }
