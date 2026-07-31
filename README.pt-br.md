@@ -1,74 +1,212 @@
+<div align="center">
+
 # Ohayo
 
-[English](README.md) | **Português**
+### Claude vs Codex — Provider Lab
 
-Centro de automações na barra de menus do macOS para Claude, Codex e comandos
-shell. Ele pode encadear as janelas de uso de 5h compatíveis por conta e
-executar Agendamentos automaticamente. Swift + SwiftUI (`MenuBarExtra`), com
-Sparkle para atualizações seguras dentro do app.
+Configure cada Provedor nos próprios termos. Reúna Agendamentos, evidências de
+Janela de uso, respostas, notificações e Histórico em uma central de controle
+nativa na barra de menus do macOS.
 
-## Por quê
+[English](README.md) · **Português**
 
-Os planos Claude (Pro/Max) abrem uma janela de uso de 5h a partir do primeiro
-prompt. Quem usa pesado quer a janela já aberta na hora de sentar para
-trabalhar — não gastar a primeira hora dela aquecendo. O Ohayo encadeia as
-janelas de cada conta, e um Agendamento contínuo nunca executa de forma
-redundante enquanto já existe uma janela ativa. O detector lê passivamente os
-transcripts locais do Claude/Codex sem chamar APIs dos provedores; o Sparkle
-consulta separadamente o GitHub para buscar atualizações assinadas do app.
+macOS 13+ · Apple Silicon + Intel · Swift + SwiftUI
 
-## Recursos
+[Instalar com Homebrew](#instalação) ·
+[Baixar o DMG mais recente](https://github.com/hayashirafael/ohayo/releases/latest)
 
-- **Agendamentos unificados** — um único conceito para tudo que é agendado.
-  Cada agendamento carrega um comando embutido e uma repetição: **Contínua**
-  (encadeia janelas de 5h e inicia automaticamente sem evidência de janela
-  ativa, a menos que você desligue esse comportamento) ou **Horários fixos**
-  (horários × dias da semana). Tudo na seção **Agendamentos**
-- **Comandos configuráveis** — um prompt do Claude (modelo, esforço,
-  safe-mode, pasta de trabalho), um prompt do Codex (modelos e esforços de
-  raciocínio descobertos na conta selecionada, acesso total por padrão com
-  alternativas de escrita na pasta e somente leitura, pasta de trabalho), ou
-  qualquer comando shell — embutido direto no agendamento. Prompts
-  Claude/Codex abrem no Terminal.app por padrão, para você continuar
-  interagindo na mesma sessão; se desligar essa opção, rodam em modo batch
-- **Multi-conta, Claude e Codex** — as pastas padrão (`~/.claude`, `~/.codex`)
-  são detectadas automaticamente quando existem; outras pastas `~/.claude*`
-  entram uma única vez, na primeira abertura, e daí em diante novas contas são
-  adicionadas a qualquer momento via "Adicionar conta…" — mostra o e-mail
-  logado, aceita apelidos
-- **Histórico e arquivos de resposta** — disparos recentes com status e
-  resposta expansível (Markdown é formatado quando selecionado, e o
-  stdout/stderr das falhas continua disponível), incluindo o estado separado
-  **Iniciado** para sessões interativas no Terminal. Respostas batch do
-  Claude/Codex podem ser salvas em `.md` (padrão) ou `.txt` numa pasta
-  escolhida, com pastas favoritas para reutilização
-- **Notificações privadas por padrão** — notificações do macOS escondem
-  prompt, resposta, erro e conta até você habilitar explicitamente os detalhes
-  em **Geral**
-- **Provider Doctor** — verificações somente leitura, na primeira abertura, da
-  instalação das CLIs e do login de cada conta Claude/Codex configurada; nunca
-  executa prompt nem consome cota
-- **Idioma** — inglês por padrão, com opção para português em **Geral**
-- **Atualizações dentro do app** — consulta automaticamente o feed assinado
-  das releases no GitHub; instala e reinicia sem download manual do DMG
-- **Pausar/Retomar** por conta, em **Contas**, e **Iniciar com o Mac**
-  opcional
+</div>
 
-## Requisitos
+<table>
+  <tr>
+    <td width="50%">
+      <img src="assets/readme/ohayo-claude-controls.png" alt="Controles de Agendamento Claude no Ohayo com repetição Contínua, saída da resposta, modelo, esforço e seleção de Skill instalada">
+    </td>
+    <td width="50%">
+      <img src="assets/readme/ohayo-codex-controls.png" alt="Controles de Agendamento Codex no Ohayo com repetição Contínua, saída da resposta, modelo da Conta, raciocínio e seleção de Skill instalada">
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Plano de controle do Claude</strong><br>Escolha no catálogo Claude atual do Ohayo, defina o esforço, reutilize uma Skill instalada e decida se o Ohayo pode pré-autorizar o trust básico da pasta.</td>
+    <td><strong>Plano de controle do Codex</strong><br>Escolha um modelo descoberto na Conta e um raciocínio compatível, reutilize uma Skill instalada e defina Acesso total, Escrita na pasta ou Somente leitura explicitamente.</td>
+  </tr>
+</table>
 
-- macOS 13+; as releases publicadas desde a v1.2.0 são universais para Apple
-  Silicon e Intel
-- [Claude Code](https://claude.com/claude-code) instalado e logado (somente
-  se você usar Agendamentos Claude)
-- [Codex CLI](https://github.com/openai/codex) instalado e logado (opcional,
-  só para contas/comandos Codex)
-- Para build a partir do código: Swift 5.9+ (Xcode ou Command Line Tools)
+O Ohayo mantém **Claude Code** e **Codex CLI** nativos sem fingir que são o
+mesmo Provedor. Cada Agendamento preserva a Conta selecionada, o projeto, os
+controles de modelo, a decisão de permissão, a repetição e o comportamento da
+saída. As CLIs continuam sendo pré-requisitos externos: o usuário cuida da
+instalação e da autenticação, e elas permanecem responsáveis pelo trabalho que
+executam.
 
-O Ohayo verifica a conta Claude ou Codex selecionada imediatamente antes de
-cada disparo agendado. Se a conta não estiver logada, o disparo é registrado
-sem abrir uma sessão; o histórico mostra o comando exato de login com a pasta
-da conta selecionada. Se a CLI falhar por outro motivo, os detalhes do
-histórico preservam stdout e stderr quando disponíveis.
+Comandos shell também podem executar em horários fixos, mas não ganham contrato
+de Conta, modelo, Skill ou Janela de uso do Claude/Codex.
+
+## O mesmo formulário. Controles próprios de cada Provedor.
+
+| | Claude Code | Codex CLI |
+| --- | --- | --- |
+| **Conta** | `~/.claude` nativa ou uma pasta Claude customizada cadastrada | `~/.codex` nativa ou uma pasta Codex customizada cadastrada |
+| **Origem dos modelos** | Catálogo Claude atual do Ohayo: Haiku 4.5, Sonnet 5 e Opus 4.8 | Modelos visíveis no `models_cache.json` da Conta selecionada; um fallback interno só é usado quando o cache está ausente, inválido ou não contém modelos visíveis |
+| **Controle de profundidade** | Esforço: low, medium, high, xhigh ou max | Níveis de raciocínio aceitos pelo modelo selecionado; uma escolha incompatível é normalizada para o padrão aceito por aquele modelo |
+| **Invocação de Skill** | Uma Skill instalada prefixa o prompt como `/skill` | Uma Skill instalada prefixa o prompt como `$skill` |
+| **Acesso ao projeto** | Consentimento separado **Confiar nesta pasta para o Claude**; ligado por padrão para o trust básico do projeto | Modos explícitos **Acesso total**, **Escrita na pasta** ou **Somente leitura** |
+| **Execução** | Hand-off interativo ao Terminal ou batch observável em background | Hand-off interativo ao Terminal ou batch observável com `codex exec` |
+
+Os nomes do Claude acima descrevem o catálogo desta versão do Ohayo, não uma
+garantia permanente do Provedor. Os modelos Codex dependem ainda mais
+explicitamente da Conta: o cache da Conta selecionada é preferido, o fallback
+é apenas uma rota de resiliência e nenhuma lista exibida deve ser entendida
+como disponibilidade universal.
+
+### Claude: modelo, esforço, Skill e trust
+
+- **Modelo e esforço** são escolhas independentes do Agendamento no catálogo
+  Claude atual do Ohayo. A disponibilidade e a execução continuam pertencendo
+  à CLI Claude instalada e à Conta selecionada.
+- **Skill** seleciona uma customização Claude instalada e prepara sua invocação
+  nativa. Por padrão, o Ohayo ignora as customizações do Claude — isso não é
+  sandbox. Selecionar uma Skill desliga essa opção para carregar as
+  customizações nativas. Uma Skill pode ampliar o contexto do agente, mas não
+  concede acesso ao filesystem.
+- **Trust da pasta** permite ao Ohayo pré-autorizar o trust básico do projeto
+  selecionado. Imports externos de `CLAUDE.md` não são pré-aprovados, e o
+  Claude ainda pode pedir consentimento separado pelo próprio fluxo de
+  permissões.
+- O Claude nativo executa sem forçar `CLAUDE_CONFIG_DIR=~/.claude`; Contas
+  customizadas cadastradas recebem seu próprio override.
+
+### Codex: catálogo da Conta, raciocínio, Skill e acesso
+
+- **Modelo e raciocínio** acompanham a Conta selecionada. O Ohayo lê do cache
+  as entradas visíveis e os níveis de raciocínio aceitos, mantendo o
+  **Padrão da conta** como fonte da verdade quando não há override.
+- **Skill** seleciona uma Skill Codex instalada e prepara a invocação `$skill`.
+  Ela pode ampliar o contexto; não é sandbox nem concessão de permissão.
+- **Acesso total** é o padrão e executa sem sandbox nem pedidos de aprovação.
+  **Escrita na pasta** usa o sandbox `workspace-write` na pasta selecionada.
+  **Somente leitura** usa o sandbox `read-only`.
+- Para uma sessão interativa confiada, o Ohayo passa um override oficial
+  efêmero de trust do projeto. Ele não reescreve o `config.toml` da Conta.
+
+## Uma faixa compartilhada: Janelas de uso compatíveis de cinco horas
+
+![Novo Agendamento Claude selecionando repetição Contínua para uma Janela de uso de cinco horas detectada e tentativa opcional de bootstrap](assets/readme/ohayo-claude-continuous.png)
+
+**Contínua** está disponível para os dois Provedores nativos. Ela reconstrói
+uma Janela de uso de cinco horas compatível a partir de evidência positiva em
+transcripts locais, pula um Disparo Contínuo redundante enquanto a janela está
+ativa e programa a próxima tentativa perto do fim detectado.
+
+```text
+Evidência local positiva
+          ↓
+Janela de uso ativa por cinco horas
+          ↓
+Pula Disparos Contínuos redundantes
+          ↓
+Tenta novamente perto do fim detectado
+```
+
+> Contínua é automação baseada em evidência, não promessa de cota.
+
+- Claude exige um evento real de assistant, sem erro e com uso positivo de
+  tokens.
+- Codex exige um evento real `token_count` com `last_token_usage` positivo.
+- Dados de autenticação, modelo, rede, sintéticos, com zero tokens, ilegíveis
+  ou com schema desconhecido nunca criam uma Janela de uso fictícia.
+- Um novo Agendamento Contínuo pode tentar iniciar opcionalmente quando a
+  detecção concluir que não há janela ativa. Esse Disparo pode consumir cota
+  do provedor.
+- Um bootstrap entregue sem evidência positiva entra em cooldown limitado; ele
+  não é repetido continuamente.
+
+O Ohayo **não** garante reset do provedor, cota disponível, um Disparo concluído
+a cada cinco horas nem execução 24/7. Planos, capacidade da Conta e limites
+adicionais do provedor continuam sendo a fonte da verdade. Agendamentos em
+Horários fixos permanecem independentes e não são suprimidos por uma Janela de
+uso ativa.
+
+## Da configuração à evidência
+
+```text
+Agendamento + Conta + controles do Provedor
+                         ↓
+                  Disparo preparado
+             ↙                              ↘
+Batch em background                 Hand-off ao Terminal
+observado pelo Ohayo                aberto para interação
+             ↓                              ↓
+Resultado + prévia da resposta             Iniciado
++ arquivo capturado + notificação          sem resposta final capturada
+             ↘                              ↙
+                         Histórico
+```
+
+### Batch em background e Terminal são diferentes de propósito
+
+| Execução | O que o Ohayo consegue observar | Contrato do Histórico |
+| --- | --- | --- |
+| **Batch em background** | Resultado do processo, captura limitada de stdout/stderr, timeout e cancelamento; com **Mostrar resposta**, uma prévia formatada da resposta e um arquivo opcional Markdown ou texto simples com a saída capturada | Sucesso, falha, pulado ou outro resultado observado, com detalhes da resposta quando disponíveis |
+| **Terminal** | A sessão interativa foi entregue ao Terminal.app | **Iniciado** — nunca promovido a Sucesso porque o Ohayo não observa o exit status final |
+
+Sem um projeto selecionado, Disparos de Provedor usam
+`~/Library/Application Support/Ohayo/workspace`, não a pasta pessoal. Arquivos
+de resposta usam por padrão
+`~/Library/Application Support/Ohayo/Responses`, e pastas favoritas de
+resposta ficam armazenadas localmente.
+
+## Respostas, notificações privadas e Histórico
+
+<table>
+  <tr>
+    <td width="42%">
+      <img src="assets/readme/ohayo-notification-privacy.png" alt="Ajustes Gerais do Ohayo com detalhes sensíveis das notificações desativados por padrão">
+    </td>
+    <td width="58%">
+      <img src="assets/readme/ohayo-response-history.png" alt="Histórico do Ohayo com resposta batch Codex expandida, arquivo de resposta salvo, Disparo Claude marcado como Iniciado e Disparo Contínuo pulado">
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Notifique sem vazar contexto</strong><br>Cada Agendamento em background pode habilitar um alerta de sucesso. Respostas observadas e falhas agendadas também podem notificar; prompt, resposta, erro e detalhes da Conta ficam ocultos, a menos que os detalhes sensíveis sejam habilitados explicitamente em Geral.</td>
+    <td><strong>Leia agora. Encontre depois.</strong><br>Prévias de respostas batch observadas ficam com o Disparo no Histórico e podem apontar para um arquivo Markdown ou texto com a saída capturada. Hand-offs interativos permanecem Iniciados.</td>
+  </tr>
+</table>
+
+A permissão para notificações vem do macOS. O Ohayo pode notificar um sucesso
+habilitado, uma resposta observada ou uma falha agendada. Essas notificações
+são separadas de hooks do Claude ou notificações do Codex e não aumentam o que
+o Ohayo consegue observar numa sessão interativa do Terminal.
+
+O Histórico preserva Provedor, snapshot da Conta, modelo, origem, horário e o
+resultado que o Ohayo realmente observou. Ele distingue Disparos concluídos
+com sucesso, com falha, pulados, perdidos e iniciados em vez de apresentar todo
+Disparo como trabalho concluído.
+
+## Primeiros passos
+
+1. Abra o Ohayo e conclua ou feche o guia inicial não bloqueante.
+2. Em **Contas**, confirme as Contas Claude e Codex que deseja usar.
+3. Em **Agendamentos**, escolha **Novo Agendamento…** e selecione o Provedor.
+4. Configure controles de modelo, Skill, acesso ao projeto, execução e
+   repetição em **Horários fixos** ou **Contínua** daquele Provedor.
+5. Ative **Mostrar resposta** para um resultado batch observável, ou mantenha o
+   Terminal para um hand-off interativo.
+6. Em Disparos em background, ative notificações de sucesso quando forem úteis
+   e inspecione cada Disparo no **Histórico**.
+
+Imediatamente antes de um Disparo Claude/Codex, o Ohayo verifica a autenticação
+da Conta selecionada. Se ela não estiver logada, nenhuma sessão do agente é
+aberta; o Histórico registra o Disparo e mostra o comando de login para a
+pasta daquela Conta.
+
+## Também incluído
+
+| Controle diário | Proteções operacionais |
+| --- | --- |
+| **Primeiro, a barra de menus** — Veja os próximos 1–5 Disparos e suas Contas sem manter um ícone no Dock. O ícone aparece somente enquanto uma janela padrão do Ohayo está aberta. | **Contas prontas** — Pause ou retome cada Conta de forma independente. O Provider Doctor somente leitura verifica instalação das CLIs e autenticação sem executar um prompt. |
+| **Dois modos de repetição** — Combine horários com dias da semana em **Horários fixos** ou use um Agendamento **Contínuo** habilitado por Conta. | **Batch limitado** — Opcionalmente limite a execução em background a um número inteiro positivo de minutos. Sessões interativas no Terminal continuam sem supervisão. |
+| **Controles nativos** — Escolha inglês ou português, inicie o Ohayo com o Mac e abra **Geral** pelo atalho padrão `⌘,`. | **Uma janela central** — Navegue entre Agendamentos, Contas, Histórico e Geral enquanto o painel compacto da barra de menus mantém o foco nos próximos Disparos. |
 
 ## Instalação
 
@@ -81,36 +219,117 @@ brew install --cask ohayo
 ```
 
 O Homebrew instala a release publicada mais recente. Instalações anteriores à
-v1.2.0 precisam de um último `brew upgrade --cask ohayo`; depois disso, as
-próximas releases também podem ser instaladas em **Ohayo → Geral → Sobre →
-Buscar atualizações…**.
+v1.2.0 precisam de um último `brew upgrade --cask ohayo`; releases desde a
+v1.2.0 também podem atualizar em **Ohayo → Geral → Sobre → Buscar
+atualizações…**.
 
 ### DMG
 
-Baixe o `Ohayo-<versão>.dmg` da [última release](../../releases/latest) e
-arraste o **Ohayo** para **Applications**.
+Baixe o `Ohayo-<versão>.dmg` da
+[release mais recente](https://github.com/hayashirafael/ohayo/releases/latest),
+abra-o e arraste o **Ohayo** para **Applications**.
 
-> As releases publicadas desde a v1.2.0 são universais para Apple Silicon e
-> Intel.
-> Quando as credenciais Apple não estão disponíveis, releases para testers usam
-> assinatura ad-hoc sem notarização. O Gatekeeper pode exigir aprovação manual
-> na primeira abertura, e o macOS pode pedir acesso a pastas protegidas novamente
-> após uma atualização porque a identidade de código não é estável. Quando todas
-> as credenciais Apple estão configuradas, o mesmo workflow usa Developer ID,
-> hardened runtime, notarização e stapling.
+As releases publicadas desde a v1.2.0 são universais para Apple Silicon e
+Intel. Quando as credenciais Apple não estão disponíveis, releases para
+testers usam assinatura ad-hoc sem notarização. O Gatekeeper pode exigir
+aprovação manual na primeira abertura, e o macOS pode pedir acesso a pastas
+protegidas novamente após uma atualização porque a identidade de código
+ad-hoc não é estável. Com todas as credenciais Apple configuradas, o workflow
+de release usa Developer ID, hardened runtime, notarização e stapling.
 
-### A partir do código
+## Requisitos
+
+- macOS 13+
+- [Claude Code](https://claude.com/claude-code), instalado e logado somente
+  para Agendamentos Claude
+- [Codex CLI](https://github.com/openai/codex), instalado e logado somente para
+  Agendamentos Codex
+- Swift 5.9+ pelo Xcode ou Command Line Tools, somente para build a partir do
+  código
+
+## Permissões e privacidade
+
+<details>
+<summary><strong>Primeira abertura e permissões do macOS</strong></summary>
+
+O app empacotado mostra uma vez um guia inicial não bloqueante. Ele faz verificações somente leitura da instalação das CLIs e da autenticação das Contas Claude/Codex configuradas. Essas verificações não executam prompt, iniciam login nem consomem cota do provedor intencionalmente.
+
+O guia pode pedir acesso às notificações, testar a automação do Terminal para sessões interativas e, opcionalmente, habilitar **Iniciar com o Mac**. Fechá-lo não desativa o Ohayo. Reabra-o pelo painel ou em **Ohayo → Geral → Acesso ao Sistema → Permissões…**.
+
+Se um acesso foi negado, altere-o em **Ajustes do Sistema → Notificações → Ohayo** ou **Ajustes do Sistema → Privacidade e Segurança → Automação**. Para um projeto protegido, como Documents, escolha **Permitir** no diálogo do macOS; o Ohayo não pode conceder essa permissão por você.
+
+Um app assinado com Developer ID pode manter a mesma identidade de autorização entre atualizações. Um rebuild local ou para testers com assinatura ad-hoc tem outra identidade de código, então o macOS pode pedir novamente.
+
+</details>
+
+<details>
+<summary><strong>Dados locais, skills e conteúdo sensível</strong></summary>
+
+A detecção de Janelas de uso lê transcripts locais compatíveis do Claude/Codex e não chama uma API de provedor. Contas, Agendamentos, pastas favoritas e Histórico ficam armazenados localmente. O Sparkle e as CLIs dos provedores continuam usando seus próprios acessos de rede, portanto o Ohayo não é apresentado como produto totalmente offline.
+
+Prompts batch são enviados por stdin, em vez de expostos na lista de argumentos do processo. As notificações do macOS escondem prompt, resposta, erro e detalhes da Conta por padrão.
+
+Uma Skill selecionada pode ampliar o contexto, mas não concede acesso. O modo de acesso do Codex ou o fluxo de permissões do próprio Claude continua sendo a fonte da verdade para o filesystem.
+
+</details>
+
+## Atualizações
+
+Releases desde a v1.2.0 consultam diariamente o feed assinado do Sparkle.
+Quando há uma atualização, sua versão aparece no painel da barra de menus e em
+**Geral → Sobre**, onde **Atualizar agora** abre o fluxo **Instalar e
+reiniciar** do Sparkle. Use **Buscar atualizações…** para consultar
+imediatamente.
+
+O Sparkle valida os arquivos de release e o `appcast.xml` com sua chave EdDSA.
+O acesso do Sparkle ao GitHub é separado da detecção passiva de Janelas de uso
+locais. As credenciais Apple determinam se um build publicado pode usar
+assinatura Developer ID e notarização.
+
+## Limites técnicos
+
+<details>
+<summary><strong>Contas, identidade, filas e tentativas</strong></summary>
+
+O Ohayo detecta `~/.claude` e `~/.codex` quando existem; outras Contas podem ser cadastradas com apelidos. A identidade do Provedor é persistida, e uma Conta customizada indisponível não é reinterpretada silenciosamente como outro Provedor nem como a Conta padrão.
+
+Caminhos canônicos do filesystem são a identidade da Conta. Os Disparos entram numa fila FIFO por Provedor/Conta, enquanto Contas diferentes podem avançar em paralelo. Falta de CLI, autenticação, permissão ou configuração vira um estado que exige atenção em vez de um loop de alertas. Falhas transitórias conhecidas usam tentativas limitadas.
+
+Somente uma instância do Ohayo executa por perfil de runtime. Produção e o perfil Dev isolado podem coexistir.
+
+</details>
+
+<details>
+<summary><strong>Comportamento da CLI e das respostas</strong></summary>
+
+O Claude nativo executa com `CLAUDE_CONFIG_DIR` removido; Contas Claude customizadas recebem seu override configurado. O Codex recebe o `CODEX_HOME` selecionado. Agendamentos shell não recebem nenhuma das variáveis de provedor.
+
+Claude em background usa seu modo print não interativo. Codex em background usa `codex exec` com as configurações selecionadas de modelo, raciocínio e acesso. A captura do processo é limitada, preservando o começo e a cauda onde costuma estar o erro; por isso o Histórico é uma visão para diagnóstico, não um arquivo ilimitado de transcripts. Quando **Mostrar resposta** está ligado, o Ohayo mantém uma prévia formatada no Histórico e pode salvar atomicamente a saída capturada e limitada como Markdown ou texto simples.
+
+</details>
+
+## Build a partir do código
+
+<details>
+<summary><strong>App local no estilo produção e DMG</strong></summary>
 
 ```bash
 git clone https://github.com/hayashirafael/ohayo.git
 cd ohayo
-swift test            # suíte de testes
+swift test
 ./scripts/make-app.sh # build/Ohayo.app (assinado ad-hoc)
-./scripts/make-dmg.sh # build/Ohayo-<versão>.dmg (requer `brew install create-dmg`)
+./scripts/make-dmg.sh # requer: brew install create-dmg
 open build/Ohayo.app
 ```
 
-Para um build local isolado que pode rodar junto do app instalado pelo DMG:
+O DMG é criado como `build/Ohayo-<versão>.dmg`.
+
+</details>
+
+<details>
+<summary><strong>Canal isolado Ohayo Dev</strong></summary>
+
+Use o bundle de desenvolvimento quando o app Ohayo instalado e seus dados precisam permanecer intocados:
 
 ```bash
 ./scripts/make-dev-app.sh
@@ -118,236 +337,17 @@ open "build/Ohayo Dev.app"
 orca computer get-app-state --app io.github.hayashirafael.Ohayo.dev --json
 ```
 
-Se o Computer Use não conseguir inspecionar diretamente a superfície da menu
-bar, exponha a janela central do app no canal de desenvolvimento:
+Se o Computer Use não conseguir inspecionar diretamente a superfície da barra de menus, exponha a janela central nesse canal de desenvolvimento:
 
 ```bash
 open "build/Ohayo Dev.app" --args --ui-testing
 ```
 
-O `Ohayo Dev.app` usa o bundle ID `io.github.hayashirafael.Ohayo.dev`,
-`~/Library/Application Support/Ohayo Dev`, um lock de instância e um domínio de
-preferências separados. Atualizações no app e Iniciar com o Mac ficam
-indisponíveis nesse canal. Seu ícone azul tem um selo **DEV** visível para
-continuar diferente da produção no Dock e no seletor de apps. O desenvolvimento
-começa sem copiar contas, agendamentos, histórico ou preferências do app de
-produção.
+O `Ohayo Dev.app` usa o bundle ID `io.github.hayashirafael.Ohayo.dev`, sua própria pasta Application Support, domínio de preferências, workspace, pasta de respostas e lock de instância. Ele não copia Contas, Agendamentos, Histórico nem preferências de produção. Atualizações no app e Iniciar com o Mac ficam indisponíveis, e seu ícone azul tem um selo **DEV** visível.
 
-### Atualizações
+</details>
 
-A versão 1.2.0 introduziu o atualizador. Instalações ainda sem Sparkle precisam
-de uma última atualização manual via Homebrew/DMG. Releases a partir da v1.2.0
-consultam diariamente o feed assinado. Quando uma release está disponível, o
-Ohayo mostra sua versão no painel da barra de menus e em **Geral → Sobre**, com
-o botão **Atualizar agora**, que abre o fluxo **Instalar e reiniciar** do
-Sparkle. Use **Ohayo → Geral → Sobre → Buscar atualizações…** para verificar
-imediatamente.
+---
 
-Os arquivos de atualização e o feed são validados criptograficamente pela chave
-EdDSA separada do Sparkle nos dois modos de distribuição. O workflow de release
-exige a credencial do Sparkle e publica juntos o DMG e o `appcast.xml` assinado;
-as credenciais Apple habilitam adicionalmente a assinatura Developer ID e a
-notarização.
-
-## Primeiros passos
-
-1. Abra o Ohayo e conclua ou feche o guia inicial não bloqueante.
-2. Em **Contas**, confirme as contas Claude/Codex que deseja usar.
-3. Em **Agendamentos**, escolha **Novo Agendamento…** e configure o Comando.
-4. Selecione **Contínua** para encadear Janelas de uso detectadas ou **Horários
-   fixos** para horários e dias da semana específicos.
-5. Use o painel da barra de menus para os próximos Disparos e o **Histórico**
-   para resultados e detalhes capturados das falhas.
-
-## Uso
-
-O Ohayo vive na barra de menus, sem ícone permanente no Dock. O macOS exibe um
-ícone no Dock apenas enquanto uma janela padrão do Ohayo está aberta, para que
-ela possa receber foco. O ícone da barra de menus fica preenchido enquanto
-alguma conta tem janela ativa, mostra `!` em erro e esmaece quando todas as
-contas agendadas estão pausadas; opcionalmente mostra também o tempo até a
-próxima janela vencer entre elas.
-
-Clicar no ícone abre um painel com os próximos disparos agendados entre todas as
-contas — quantos, é configurável em **Geral** (1–5, padrão 1) — ordenados
-por horário; contas pausadas são puladas, então só aparece o que vai
-executar de fato. O primeiro vem em destaque, os demais em linhas compactas:
-ícone do provedor, rótulo da conta, nome do Agendamento e horário. Se não houver
-nada para mostrar, o painel explica o motivo (nenhum agendamento ativo,
-todas as contas pausadas, ou apenas aguardando a próxima janela/horário).
-Clicar num card ou linha abre **Ohayo → Agendamentos** filtrado para aquela
-conta. O rodapé tem **Agendamentos**, **Histórico** e **Ajustes…**. Uma CLI
-ausente vira um aviso acionável de configuração; **Ajustes…**,
-**Permissões…** e **Sair do Ohayo** ficam agrupados no menu de ações
-secundárias.
-
-A janela central **Ohayo** abre em **Agendamentos** e tem uma sidebar com
-quatro seções:
-
-- **Contas** — por conta, a identidade logada / apelido, o provedor com seu
-  ícone, a pasta local, quantos agendamentos ativos miram a conta, e
-  **Pausar/Retomar** por conta. Adicione ou remova contas aqui
-- **Agendamentos** — a lista única de Agendamentos. Cada um tem nome, um tipo
-  (Claude / Codex / comando shell) com sua config, uma conta e uma repetição —
-  **Contínua** (encadeia janelas de uso, no máximo uma por conta) ou
-  **Horários fixos** (horários × dias da semana). Um único formulário cria ou
-  edita qualquer um deles; novos Agendamentos começam com o campo de Comando
-  vazio. Entrar por um Agendamento no painel do menu filtra essa lista para a
-  conta, com um chip para limpar o filtro
-  - **Skill opcional:** em Agendamentos Claude/Codex, escolha uma skill da
-    conta, do usuário ou do repositório selecionado. O Ohayo resolve skills da
-    conta/plugins Claude e `.claude/skills` nos ancestrais; para Codex, resolve
-    também `$HOME/.agents/skills`, `.agents/skills` nos ancestrais e as skills
-    dos plugins que a conta selecionada declara instalados e habilitados em
-    `codex plugin list --json`. A consulta é somente leitura e nunca executa um
-    prompt. Cada Disparo prefixa a skill ao Comando (`/skill comando` no
-    Claude, `$skill comando` no Codex). Selecionar uma skill carrega as
-    customizações do Claude; a UI deixa claro que isso amplia o contexto e não
-    é sandbox de filesystem
-- **Histórico** — disparos recentes em cards com status, ícone do provedor,
-  modelo, apelido/e-mail da conta, comando, resposta Markdown formatada, link
-  para o arquivo salvo e detalhes de erro; filtrável por conta do mesmo jeito
-  que Agendamentos
-- **Geral** — Iniciar com o Mac, tempo restante na barra de menus, detalhes
-  sensíveis nas notificações (desligados por padrão), quantos próximos Disparos
-  o painel mostra (1–5), Idioma, acesso ao sistema, a versão do app e **Buscar
-  atualizações…**. Abra por **Ajustes…** ou com `⌘,`
-
-### Permissões na primeira abertura
-
-O app empacotado abre uma única vez um guia não bloqueante. O Provider Doctor
-verifica quais CLIs Claude/Codex e contas configuradas estão prontas e mostra o
-comando de login correto quando há algo a corrigir. As verificações são somente
-leitura: nunca executam prompt, iniciam login ou consomem cota. Nele você também
-pode permitir notificações, testar a automação do Terminal usada nas sessões
-interativas e, opcionalmente, ativar **Iniciar com o Mac**. Fechar o guia não
-desativa o app; reabra-o pelo menu de ações secundárias do painel ou em
-**Ohayo → Geral → Acesso ao Sistema → Permissões…**.
-
-Se notificações ou automação do Terminal forem negadas, altere-as em **Ajustes
-do Sistema → Notificações → Ohayo** ou **Ajustes do Sistema → Privacidade e
-Segurança → Automação** e reabra o guia para atualizar ou testar a integração.
-
-Ao salvar um Agendamento Claude com **Confiar nesta pasta para o Claude**
-ligado, ou um Agendamento Codex em **Acesso total** ou **Escrita na pasta**, o
-Ohayo verifica o acesso imediatamente. Para uma pasta protegida pelo macOS,
-como Documents, escolha **Permitir** no diálogo do sistema. Um Ohayo assinado
-com Developer ID mantém essa autorização entre atualizações; um rebuild local
-ou de teste ad-hoc tem outra identidade de código e o macOS pode perguntar de
-novo. O app não pode clicar nem conceder essa permissão de privacidade por você.
-
-## Como funciona
-
-Para manter as Repetições Contínuas, o Ohayo lê os transcripts locais da
-conta (`<conta>/projects/**.jsonl` no Claude, `sessions/**.jsonl` no Codex,
-por `mtime`) e reconstrói a janela de 5h corrente. Só aceita evidência positiva
-de uso: evento real de assistant Claude, sem erro/sintético e com tokens, ou
-evento Codex `token_count` com `last_token_usage` positivo. Falhas de
-autenticação/modelo/rede e eventos com zero tokens não criam uma janela
-fictícia. Transcripts ilegíveis ou um schema de uso desconhecido viram um
-estado indisponível explícito e nunca iniciam um bootstrap. Se houver uma
-ativa, somente um Disparo contínuo redundante é pulado; Agendamentos em
-Horários Fixos sempre executam.
-
-Um Disparo do Claude inicia:
-
-```
-claude -p --model <modelo> --effort <esforço> [--safe-mode]
-```
-
-O prompt é escrito em stdin, em vez de exposto na lista de argumentos do
-processo. A conta Claude nativa roda deliberadamente com
-`CLAUDE_CONFIG_DIR` ausente, pois exportar `~/.claude` muda a semântica de
-conta do Claude Code; perfis Claude customizados recebem o override. O Codex
-recebe o `CODEX_HOME` selecionado, com `~/.codex` como padrão. Agendamentos shell
-não recebem variável de nenhum provider.
-
-Se o agendamento tem skill, o prompt é prefixado antes do disparo (`/skill
-comando` no Claude, `$skill comando` no Codex). No Claude isso exige carregar
-as customizações; “ignorar customizações do Claude” não é apresentado como
-sandbox.
-
-Por padrão, Claude/Codex abrem no Terminal.app sem `-p` / `exec`, deixando a
-sessão interativa aberta. Abrir o Terminal é registrado como **Iniciado**, não
-como execução concluída: o Ohayo não observa o exit status final da sessão. Um
-Agendamento interativo em Horários Fixos ainda abre no horário agendado mesmo
-com janela ativa. Sem diretório de trabalho, disparos de provider interativos e
-batch usam `~/Library/Application Support/Ohayo/workspace` em vez da sua pasta
-pessoal (ou o equivalente isolado `Ohayo Dev/workspace`). O script temporário
-privado usa modo `0600`, se remove no exit/sinais e resíduos antigos de crash
-são limpos.
-
-Depois de escolher uma pasta de trabalho, o Ohayo pode solicitar acesso a ela
-ao salvar o Agendamento. O Claude mantém a opção dedicada **Confiar nesta pasta
-para o Claude**, ligada por padrão, que registra apenas o trust básico do
-projeto. O Codex usa um único controle **Acesso** com três modos explícitos:
-**Acesso total** (padrão, sem sandbox nem pedidos de aprovação), **Escrita na
-pasta** (pasta confiada com sandbox `workspace-write`) e **Somente leitura**
-(sem pré-autorizar o trust da pasta). Sessões Codex interativas e confiadas
-recebem um override oficial efêmero
-`projects.<path>.trust_level="trusted"`; o Ohayo nunca reescreve o
-`config.toml`. Imports externos do `CLAUDE.md` nunca são pré-aprovados, então
-esse consentimento separado continua visível.
-
-Os padrões Claude — Haiku, esforço baixo, customizações ignoradas e `1+1` —
-formam um Comando mínimo para a Repetição Contínua. O Ohayo lê o
-`models_cache.json` da conta Codex selecionada para oferecer apenas os modelos
-listados e seus esforços de raciocínio compatíveis, com um fallback interno
-atual quando esse cache não estiver disponível. Um Disparo Codex batch executa
-`codex exec [--model <modelo>]` com
-`--dangerously-bypass-approvals-and-sandbox` em **Acesso total**, `--sandbox
-workspace-write` em **Escrita na pasta** ou `--sandbox read-only` em **Somente
-leitura**, seguido de `--skip-git-repo-check --color never` e de um override de
-raciocínio opcional. O mesmo modo de acesso vale para sessões interativas no
-Terminal, e no batch o prompt sempre chega por stdin. Em **Padrão da conta**,
-modelo e raciocínio são omitidos para o `config.toml` valer.
-
-Quando **Mostrar resposta** está ligado num Agendamento Claude/Codex batch, a
-resposta capturada completa é salva atomicamente como Markdown (padrão) ou
-texto simples na pasta selecionada; o padrão é
-`~/Library/Application Support/Ohayo/Responses` (ou o equivalente isolado
-`Ohayo Dev/Responses`). Pastas favoritas ficam salvas localmente para
-reutilização. O Histórico mantém uma prévia limitada, renderiza Markdown e
-oferece um link para o arquivo. O limite de duração batch é opcional por
-Agendamento e vem desabilitado por padrão. Ative **Limitar duração** e informe
-qualquer número inteiro positivo de minutos; sessões interativas no Terminal
-não são supervisionadas por timeout. A captura do processo é limitada
-preservando o início e a cauda, onde normalmente está o erro.
-Só uma instância do Ohayo roda por vez. Dentro dela, disparos formam uma fila
-FIFO por provider/conta em vez de serem descartados por um lock global; contas
-diferentes podem avançar em paralelo. Falhas transitórias usam backoff
-exponencial limitado; falta de login/CLI ou permissão do Terminal vira estado
-que exige atenção, sem loop de alertas.
-
-Qual conta é Claude ou Codex é inferido pelo conteúdo da pasta, não pelo nome,
-nesta ordem: um `.claude.json` indica Claude; senão um `auth.json` indica
-Codex; senão uma subpasta `projects/` indica Claude; senão uma subpasta
-`sessions/` indica Codex. O provider de uma conta custom cadastrada também é
-persistido, então uma pasta temporariamente ausente ou ambígua não muda de
-provider; disparo e leitura de cota recebem essa identidade explicitamente.
-Pastas de conta existentes usam o caminho canônico do filesystem como
-identidade. Cadastrar ou selecionar um symlink para a mesma conta Claude/Codex
-não cria outra fila, Agendamento, pausa nem cooldown de cota.
-
-Um novo agendamento **Contínuo** tenta iniciar automaticamente quando não existe
-evidência de janela ativa. Esse também é o padrão de compatibilidade para
-agendamentos contínuos criados por versões anteriores do Ohayo. Desligue
-**Tentar iniciar quando não houver janela ativa** para mantê-lo aguardando. O
-formulário avisa que o comando pode consumir cota do provedor. Depois de uma
-tentativa de bootstrap entregue, o Ohayo espera até cinco horas antes de tentar
-outra vez para esse agendamento, inclusive após reiniciar o app; se uma janela
-real aparecer antes, seu transcript substitui o cooldown. Falhas transitórias
-conhecidas mantêm o retry exponencial mais curto.
-O backoff começa quando a falha retorna. Um hand-off agendado mantém seu próprio
-cooldown de recuperação mesmo quando o início automático foi explicitamente
-desligado. Erros de
-autenticação, CLI, permissão ou configuração param em um estado que
-exige atenção, em vez de virar outro cooldown. Pausar a conta ou desligar a
-opção cancela o trabalho de bootstrap. Depois de detectar uma janela, o Ohayo
-arma no fim dela e encadeia a próxima; uma tentativa redundante é pulada
-enquanto a janela está ativa.
-Um agendamento de **Horários fixos** sempre dispara nos seus horários × dias da
-semana, tanto em batch quanto no modo interativo. No wake, horários fixos
-disparam no máximo uma vez para recuperar a ocorrência mais recente que perdeu
-— um sleep longo nunca gera uma rajada de disparos atrasados, e o launch em si
-nunca reproduz ocorrências perdidas antes dele.
+O Ohayo é construído com Swift 5.9, SwiftUI `MenuBarExtra`, Swift Package
+Manager e Sparkle.
